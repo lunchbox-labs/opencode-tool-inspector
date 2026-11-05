@@ -1,7 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-tool-inspector",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "Inspect the tools available to OpenCode agents from the TUI",
   "license": "MIT",
   "type": "module",
