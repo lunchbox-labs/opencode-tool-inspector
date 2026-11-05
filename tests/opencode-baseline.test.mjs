@@ -16,17 +16,22 @@ test("published package has no OpenCode engine gate and retains the Node require
   assert.equal(lock.packages[""].engines.node, manifest.engines.node);
 });
 
-test("release retains independently pinned SDK and plugin build dependencies", () => {
-  assert.equal(manifest.devDependencies["@opencode-ai/plugin"], "1.19.5");
-  assert.equal(manifest.devDependencies["@opencode-ai/sdk"], "1.19.5");
-});
-
-test("test-only host policy retains the range and floor independently of package engines", async () => {
+test("SDK and plugin build dependencies share one exact version within the supported host range", async () => {
   const support = JSON.parse(
     await readFile(new URL("./opencode.json", import.meta.url), "utf8"),
   );
-  assert.equal(support.range, "1.19.x");
-  assert.equal(support.floor, "1.19.0");
+  const plugin = manifest.devDependencies["@opencode-ai/plugin"];
+  assert.equal(manifest.devDependencies["@opencode-ai/sdk"], plugin);
+  assert.match(plugin, /^\d+\.\d+\.\d+$/);
+  const [major, minor, patch] = plugin.split(".").map(Number);
+  const [floorMajor, floorMinor, floorPatch] = support.floor
+    .split(".")
+    .map(Number);
+  assert.equal(`${major}.${minor}.x`, support.range);
+  assert.ok(
+    major === floorMajor && minor === floorMinor && patch >= floorPatch,
+    `${plugin} is below the supported floor ${support.floor}`,
+  );
 });
 
 test("TUI dev dependencies match the copies every supported OpenCode host loads", () => {

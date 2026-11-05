@@ -7,7 +7,7 @@ Review the supplied diff and affected flows as a knowledgeable OpenCode user. Re
 
 Trace a realistic task from opening the inspector through finding a tool, reading its description and input schema, and seeing which agents can use it. Check navigation, filtering, scrolling, long descriptions and schemas, empty and error states, and back/close behavior.
 
-For input editing or tool calls, check that inputs are validated against the schema with clear errors, that a call never runs without an explicit confirmation naming the tool and its inputs, that the confirmation states that a direct call skips OpenCode's permission prompts, and that results and failures are readable.
+For input editing or tool calls, check that inputs are validated against the schema with clear errors, that a call never runs without an explicit confirmation naming the tool and its inputs, that the confirmation states whether OpenCode's permission rules apply to the call, and that results and failures are readable.
 
 Separate source inference, test output, screenshots and observed runtime behavior. Do not claim real user testing or accessibility certification from source review. Read available screenshots or logs; explicitly state what could not be exercised.
 

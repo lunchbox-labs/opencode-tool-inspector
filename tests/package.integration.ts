@@ -61,8 +61,8 @@ test(
       ],
       { timeout: 120_000, signal: t.signal },
     );
-    // OpenCode resolves a package's server entry from its root export, so a TUI-only
-    // package must not export one.
+    // OpenCode resolves a package's server entry from ./server or its root export, so a
+    // TUI-only package must export neither.
     await writeFile(
       join(root, "consumer.mjs"),
       `import assert from 'node:assert/strict';
@@ -71,7 +71,9 @@ assert.equal(tui.id, 'tool-inspector');
 assert.equal(typeof tui.tui, 'function');
 assert.equal(Object.hasOwn(tui, 'server'), false);
 await tui.tui({}, undefined, {});
-await assert.rejects(import('@lunchbox-labs/opencode-tool-inspector'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+for (const specifier of ['@lunchbox-labs/opencode-tool-inspector', '@lunchbox-labs/opencode-tool-inspector/server']) {
+  await assert.rejects(import(specifier), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' }, specifier);
+}
 `,
     );
     await execute(process.execPath, [join(root, "consumer.mjs")], {
