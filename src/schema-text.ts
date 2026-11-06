@@ -121,12 +121,16 @@ function mergedAllOf(
       continue;
     }
     const resolved = resolveReference(member, root, visiting);
+    const memberVisiting =
+      resolved.reference === undefined
+        ? visiting
+        : new Set([...visiting, resolved.reference]);
     const memberNode =
       member === node
         ? member
         : resolved.recursive
           ? {}
-          : mergedAllOf(resolved.node, root, visiting);
+          : mergedAllOf(resolved.node, root, memberVisiting);
     if (isObject(memberNode.properties)) {
       Object.assign(properties, memberNode.properties);
     }
@@ -257,7 +261,7 @@ function constraintNotes(node: JsonObject): string[] {
     notes.push(`format ${node.format}`);
   }
   if (typeof node.pattern === "string") {
-    notes.push(`pattern ${literal(node.pattern)}`);
+    notes.push(`pattern "${node.pattern.replaceAll("\n", "\\n")}"`);
   }
   if (Object.hasOwn(node, "default")) {
     notes.push(`default ${literal(node.default)}`);
@@ -301,18 +305,54 @@ function nestedObject(
   return undefined;
 }
 
+function muted(text: string): TextSegment {
+  return { text, tone: "muted" };
+}
+
+function listedObjectVariants(
+  node: JsonObject,
+  root: JsonObject,
+  visiting: ReadonlySet<string>,
+): number {
+  return (variants(node) ?? []).filter(
+    (variant) =>
+      isObject(variant) && nestedObject(variant, root, visiting) !== undefined,
+  ).length;
+}
+
+/** Lists an object schema's properties, or each option of a union, indented by depth. */
 function propertyLines(
   objectSchema: JsonObject,
   root: JsonObject,
   visiting: ReadonlySet<string>,
   depth: number,
 ): TextLine[] {
-  const properties = objectSchema.properties;
-  if (!isObject(properties)) {
-    return [];
-  }
   if (depth > maximumDepth) {
     return [[plain(`${indentText(depth)}…`)]];
+  }
+  const properties = objectSchema.properties;
+  if (!isObject(properties)) {
+    return (variants(objectSchema) ?? []).flatMap((variant, index) => {
+      const heading: TextLine = [
+        plain(indentText(depth)),
+        { text: `Option ${index + 1}`, tone: "name" },
+      ];
+      const nested = isObject(variant)
+        ? nestedObject(variant, root, visiting)
+        : undefined;
+      const lines =
+        nested === undefined
+          ? []
+          : propertyLines(nested.node, root, nested.visiting, depth + 1);
+      return lines.length > 0
+        ? [heading, ...lines]
+        : [
+            [
+              ...heading,
+              muted(`  ${typeName(variant, root, visiting, depth)}`),
+            ],
+          ];
+    });
   }
   const required = new Set(
     Array.isArray(objectSchema.required)
@@ -342,38 +382,17 @@ function propertyLines(
     const nested = isObject(property)
       ? nestedObject(property, root, visiting)
       : undefined;
+    const childLines =
+      nested !== undefined
+        ? propertyLines(nested.node, root, nested.visiting, depth + 1)
+        : listedObjectVariants(resolved, root, visiting) > 1
+          ? propertyLines(resolved, root, visiting, depth + 1)
+          : [];
     return [
       heading,
       ...descriptionLines(resolved.description, depth + 1),
-      ...(nested === undefined
-        ? []
-        : propertyLines(nested.node, root, nested.visiting, depth + 1)),
+      ...childLines,
     ];
-  });
-}
-
-function muted(text: string): TextSegment {
-  return { text, tone: "muted" };
-}
-
-/** One block per alternative input shape, for schemas whose root is a union. */
-function variantLines(
-  alternatives: readonly unknown[],
-  root: JsonObject,
-): TextLine[] {
-  return alternatives.flatMap((variant, index) => {
-    const heading: TextLine = [{ text: `Option ${index + 1}`, tone: "name" }];
-    const nested = isObject(variant)
-      ? nestedObject(variant, root, new Set())
-      : undefined;
-    const lines =
-      nested === undefined
-        ? []
-        : propertyLines(nested.node, root, nested.visiting, 1);
-    if (lines.length > 0) {
-      return [heading, ...lines];
-    }
-    return [[...heading, muted(`  ${typeName(variant, root, new Set(), 0)}`)]];
   });
 }
 
@@ -417,7 +436,12 @@ function rootLines(schema: JsonObject): TextLine[] {
   if (alternatives !== undefined && informative === true) {
     return [
       [muted("Takes one of these inputs:")],
-      ...variantLines(alternatives, schema),
+      ...propertyLines(
+        mergedAllOf(resolved, schema, new Set()),
+        schema,
+        new Set(),
+        0,
+      ),
     ];
   }
   const type = typeName(schema, schema, new Set(), 0);
@@ -434,7 +458,11 @@ export function schemaLines(schema: unknown): TextLine[] {
   if (!isObject(schema)) {
     return [[muted("OpenCode did not report an input schema.")]];
   }
-  return capped(rootLines(schema));
+  try {
+    return capped(rootLines(schema));
+  } catch {
+    return capped(rawSchemaLines(schema));
+  }
 }
 
 export function linesText(lines: readonly TextLine[]): string {

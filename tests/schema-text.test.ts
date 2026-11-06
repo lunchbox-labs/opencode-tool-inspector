@@ -191,14 +191,14 @@ test("malformed or odd schema parts render instead of throwing", () => {
         broken: { $ref: "#/$defs/%E0%A4%A" },
         nothing: false,
         untyped: { type: [] },
-        code: { type: "string", pattern: "^a\nb$" },
+        code: { type: "string", pattern: "^\\d+\nb$" },
       },
     }),
     [
       "broken  any",
       "nothing  never",
       "untyped  any",
-      'code  string, pattern "^a\\nb$"',
+      'code  string, pattern "^\\d+\\nb$"',
     ].join("\n"),
   );
 });
@@ -213,4 +213,46 @@ test("very long schemas are cut short with a count", () => {
   const lines = schemaLines({ type: "object", properties });
   assert.equal(lines.length, 401);
   assert.equal(linesText(lines.slice(-1)), "… 50 more lines not shown.");
+});
+
+test("self-referencing allOf members render instead of overflowing the stack", () => {
+  assert.match(
+    render({ allOf: [{ $ref: "#" }] }),
+    /^OpenCode reported this input schema:/,
+  );
+  assert.equal(
+    render({
+      type: "object",
+      properties: { a: { $ref: "#/$defs/B" } },
+      $defs: { B: { allOf: [{ $ref: "#/$defs/B" }] } },
+    }),
+    "a  any",
+  );
+});
+
+test("a property that is a union of objects lists each option's fields", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        target: {
+          oneOf: [
+            {
+              type: "object",
+              properties: { kind: { const: "file" }, path: { type: "string" } },
+            },
+            { type: "object", properties: { kind: { const: "url" } } },
+          ],
+        },
+      },
+    }),
+    [
+      "target  object",
+      "  Option 1",
+      '    kind  "file"',
+      "    path  string",
+      "  Option 2",
+      '    kind  "url"',
+    ].join("\n"),
+  );
 });
