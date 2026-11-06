@@ -38,7 +38,11 @@ export type ToolInput = string | { readonly id: string };
 export interface ToolAgentAccessOptions {
   /** `experimental.primary_tools` from the OpenCode config: tools denied to agents running as subagents. */
   readonly primaryTools?: readonly string[];
-  /** The current session's own permission ruleset, which OpenCode applies after the agent's rules. */
+  /**
+   * The permission ruleset of the session the agents would run in, which OpenCode applies after the
+   * agent's rules. Pass a top-level session's ruleset: when it spawns a subagent, OpenCode copies only
+   * its deny and `external_directory` rules into the subagent's session.
+   */
   readonly sessionPermission?: unknown;
 }
 
@@ -49,10 +53,20 @@ export interface PatternAccess {
 }
 
 export interface AccessDecision {
-  /** Access for inputs that no pattern in `exceptions` matches. */
+  /**
+   * Access for inputs that no pattern in `exceptions` matches. OpenCode can still ask at call time for
+   * paths outside the project (the `external_directory` permission), and an `ask` the user already
+   * answered with "always" is allowed for the rest of the OpenCode process.
+   */
   readonly access: ToolAccess;
   /** Pattern-specific access in OpenCode's precedence order: a later entry wins over an earlier one when both match. */
   readonly exceptions: readonly PatternAccess[];
+  /**
+   * Whether OpenCode offers the tool to the model at all. It withholds a tool only when the last rule for
+   * its permission denies the `*` pattern, so a tool can be offered even when every call is denied.
+   * `undefined` when the rules can't be read.
+   */
+  readonly offeredToModel: boolean | undefined;
 }
 
 export interface AgentToolAccess extends AccessDecision {
@@ -77,7 +91,12 @@ const mcpResourceReadTools = new Set([
   "list_mcp_resource_templates",
   "read_mcp_resource",
 ]);
-const unknownDecision: AccessDecision = { access: "unknown", exceptions: [] };
+const unknownDecision: AccessDecision = {
+  access: "unknown",
+  exceptions: [],
+  offeredToModel: undefined,
+};
+const compiledWildcards = new Map<string, RegExp>();
 
 function field(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null
@@ -171,7 +190,7 @@ function runsOnWindows(): boolean {
 
 // Same matching as OpenCode's wildcard helper, including its trailing " *"
 // special case, slash normalization and case-insensitive matching on Windows.
-function matchesWildcard(input: string, pattern: string): boolean {
+function compileWildcard(pattern: string, flags: string): RegExp {
   let expression = pattern
     .replaceAll("\\", "/")
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -180,12 +199,23 @@ function matchesWildcard(input: string, pattern: string): boolean {
   if (expression.endsWith(" .*")) {
     expression = `${expression.slice(0, -3)}( .*)?`;
   }
-  const flags = runsOnWindows() ? "si" : "s";
-  return new RegExp(`^${expression}$`, flags).test(input.replaceAll("\\", "/"));
+  return new RegExp(`^${expression}$`, flags);
 }
 
+function matchesWildcard(input: string, pattern: string): boolean {
+  const flags = runsOnWindows() ? "si" : "s";
+  const key = `${flags}:${pattern}`;
+  let compiled = compiledWildcards.get(key);
+  if (compiled === undefined) {
+    compiled = compileWildcard(pattern, flags);
+    compiledWildcards.set(key, compiled);
+  }
+  return compiled.test(input.replaceAll("\\", "/"));
+}
+
+// A trailing " *" also matches nothing, so "* *" covers every input too.
 function isCatchAllPattern(pattern: string): boolean {
-  return /^\*+$/.test(pattern);
+  return /^\*+(?: \*)?$/.test(pattern);
 }
 
 function decide(
@@ -212,12 +242,21 @@ function decide(
     }
     exceptions.push({ pattern: rule.pattern, access: rule.action });
   }
-  return { access, exceptions };
+  const firstChange = exceptions.findIndex(
+    (exception) => exception.access !== access,
+  );
+  const lastRule = matching.at(-1);
+  return {
+    access,
+    exceptions: firstChange === -1 ? [] : exceptions.slice(firstChange),
+    offeredToModel: !(lastRule?.pattern === "*" && lastRule.action === "deny"),
+  };
 }
 
 function sameDecision(first: AccessDecision, second: AccessDecision): boolean {
   return (
     first.access === second.access &&
+    first.offeredToModel === second.offeredToModel &&
     first.exceptions.length === second.exceptions.length &&
     first.exceptions.every(
       (exception, index) =>
@@ -231,16 +270,19 @@ function denyAll(permission: string): PermissionRuleInput {
   return { permission, pattern: "*", action: "deny" };
 }
 
-// Mirrors the rules OpenCode's task tool adds to a subagent's session. The
-// parent session's own deny rules are left out because they depend on which
-// session spawns the subagent.
+// Mirrors the session rules OpenCode's task tool gives a subagent.
 function subagentSessionRules(
   agentRules: readonly PermissionRuleInput[],
+  parentSessionRules: readonly PermissionRuleInput[],
   primaryTools: readonly string[],
 ): PermissionRuleInput[] {
   const namesPermission = (permission: string) =>
     agentRules.some((rule) => rule.permission === permission);
   return [
+    ...parentSessionRules.filter(
+      (rule) =>
+        rule.action === "deny" || rule.permission === "external_directory",
+    ),
     ...["todowrite", "task"]
       .filter((permission) => !namesPermission(permission))
       .map(denyAll),
@@ -270,11 +312,11 @@ function agentAccess(
       ? unknownDecision
       : decide(permission, [...agentRules, ...sessionRules]);
   const subagentDecision = () =>
-    primaryTools === undefined
+    primaryTools === undefined || sessionRules === undefined
       ? unknownDecision
       : decide(permission, [
           ...agentRules,
-          ...subagentSessionRules(agentRules, primaryTools),
+          ...subagentSessionRules(agentRules, sessionRules, primaryTools),
         ]);
   switch (mode) {
     case "subagent":
@@ -307,8 +349,8 @@ export function resolveToolAgentAccess(
   agents: readonly AgentInput[],
   options: ToolAgentAccessOptions = {},
 ): ToolAgentAccess[] {
-  const sessionRules = readRuleset(options.sessionPermission ?? []);
-  const primaryTools = readStringList(options.primaryTools);
+  const sessionRules = readRuleset(field(options, "sessionPermission") ?? []);
+  const primaryTools = readStringList(field(options, "primaryTools"));
   const readableAgents = readItems(agents)
     .map(readAgent)
     .filter((agent) => agent !== undefined);

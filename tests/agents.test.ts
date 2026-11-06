@@ -14,7 +14,7 @@ const rule = (
   pattern = "*",
 ): PermissionRuleInput => ({ permission, pattern, action });
 
-// OpenCode 1.19.5's own starting rules for every agent.
+// A subset of OpenCode 1.19.5's starting rules for every agent.
 const defaults = [
   rule("*", "allow"),
   rule("doom_loop", "ask"),
@@ -197,22 +197,124 @@ test("agents that run both ways report subagent access only where it differs", (
   const agents = [{ name: "helper", mode: "all", permission: defaults }];
   const { helper: todo } = accessFor("todowrite", agents);
   assert.equal(todo.access, "allow");
-  assert.deepEqual(todo.whenSubagent, { access: "deny", exceptions: [] });
+  assert.deepEqual(todo.whenSubagent, {
+    access: "deny",
+    exceptions: [],
+    offeredToModel: false,
+  });
   const { helper: read } = accessFor("read", agents);
   assert.equal(read.whenSubagent, undefined);
 });
 
-test("the current session's rules apply after the agent's own rules for primary agents", () => {
-  const { build, reviewer } = accessFor(
-    "bash",
-    [
-      { name: "build", mode: "primary", permission: defaults },
-      { name: "reviewer", mode: "subagent", permission: defaults },
-    ],
-    { sessionPermission: [rule("bash", "deny")] },
+test("the session's rules apply after the agent's own, and subagents keep only its denies", () => {
+  const sessionPermission = [
+    rule("bash", "deny"),
+    rule("bash", "allow", "git *"),
+    rule("todowrite", "ask"),
+  ];
+  const agents = [
+    { name: "build", mode: "primary", permission: defaults },
+    { name: "reviewer", mode: "subagent", permission: defaults },
+    { name: "helper", mode: "all", permission: defaults },
+  ];
+  const bash = accessFor("bash", agents, { sessionPermission });
+  assert.deepEqual(
+    [bash.build.access, bash.build.exceptions],
+    ["deny", [{ pattern: "git *", access: "allow" }]],
   );
-  assert.equal(build.access, "deny");
-  assert.equal(reviewer.access, "allow");
+  assert.deepEqual(
+    [bash.reviewer.access, bash.reviewer.exceptions],
+    ["deny", []],
+  );
+  assert.deepEqual(bash.helper.whenSubagent, {
+    access: "deny",
+    exceptions: [],
+    offeredToModel: false,
+  });
+  const todo = accessFor("todowrite", agents, {
+    sessionPermission,
+    primaryTools: [],
+  });
+  assert.equal(todo.helper.access, "ask");
+  assert.equal(todo.helper.whenSubagent?.access, "deny");
+});
+
+test("a tool stays offered to the model unless its last rule denies every input", () => {
+  const { lastDenies, narrowerDenyAfter, onlyPatterns } = accessFor("bash", [
+    {
+      name: "lastDenies",
+      mode: "primary",
+      permission: [rule("bash", "allow", "git *"), rule("bash", "deny")],
+    },
+    {
+      name: "narrowerDenyAfter",
+      mode: "primary",
+      permission: [rule("bash", "deny"), rule("bash", "deny", "rm *")],
+    },
+    {
+      name: "onlyPatterns",
+      mode: "primary",
+      permission: [rule("bash", "allow", "git *")],
+    },
+  ]);
+  assert.deepEqual(
+    [lastDenies.access, lastDenies.exceptions, lastDenies.offeredToModel],
+    ["deny", [], false],
+  );
+  assert.deepEqual(
+    [
+      narrowerDenyAfter.access,
+      narrowerDenyAfter.exceptions,
+      narrowerDenyAfter.offeredToModel,
+    ],
+    ["deny", [], true],
+  );
+  assert.deepEqual(
+    [onlyPatterns.access, onlyPatterns.exceptions, onlyPatterns.offeredToModel],
+    ["ask", [{ pattern: "git *", access: "allow" }], true],
+  );
+});
+
+test("patterns that cover every input reset the general access", () => {
+  const { agent } = accessFor("bash", [
+    {
+      name: "agent",
+      mode: "primary",
+      permission: [
+        rule("bash", "allow"),
+        rule("bash", "ask", "git *"),
+        rule("bash", "deny", "* *"),
+      ],
+    },
+  ]);
+  assert.deepEqual([agent.access, agent.exceptions], ["deny", []]);
+});
+
+test("exceptions that no longer change the answer are dropped", () => {
+  const { agent } = accessFor("read", [
+    {
+      name: "agent",
+      mode: "primary",
+      permission: [
+        rule("read", "allow"),
+        rule("read", "ask", "b"),
+        rule("read", "allow", "a"),
+        rule("read", "allow", "b"),
+      ],
+    },
+  ]);
+  assert.deepEqual(agent.exceptions, []);
+});
+
+test("permission names written with backslashes match like OpenCode's", () => {
+  const { agent } = accessFor("mcp/fetch", [
+    {
+      name: "agent",
+      mode: "primary",
+      permission: [rule("mcp\\*", "deny")],
+    },
+  ]);
+  assert.equal(agent.access, "deny");
 });
 
 test("agent details are passed through for the browser to group and filter", () => {
@@ -259,6 +361,14 @@ test("unreadable rules or settings report unknown instead of throwing", () => {
     { sessionPermission: { read: "deny" } },
   );
   assert.equal(primary.access, "unknown");
+  assert.equal(primary.offeredToModel, undefined);
+
+  const [withNullOptions] = resolveToolAgentAccess(
+    ["read"],
+    [{ name: "build", mode: "primary", permission: defaults }],
+    null as unknown as undefined,
+  );
+  assert.equal(withNullOptions.agents.at(0)?.access, "allow");
 });
 
 test("unusable tool and agent entries are skipped", () => {
