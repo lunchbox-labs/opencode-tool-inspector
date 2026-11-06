@@ -85,7 +85,7 @@ test("/tools lists the tools OpenCode offers the configured model, without the i
   ]);
   const dialog = host.dialog();
   assert.equal(dialog?.kind, "select");
-  assert.equal(dialog.props.title, "Tools for openai/gpt-5");
+  assert.equal(dialog.props.title, "Tools for openai/gpt-5 (configured model)");
   assert.deepEqual(
     dialog.props.options.map(({ title, description, footer }) => ({
       title,
@@ -152,11 +152,11 @@ test("choosing a tool shows its description and input, and Escape returns to it 
   assert.equal(
     detail.text,
     [
-      "As offered to openai/gpt-5",
-      "Description",
-      "Read a file from the local filesystem.\n\nUsage:\n- Use absolute paths.",
+      "As offered to openai/gpt-5 (configured model)",
       "Input",
       "filePath  string, required\n  The absolute path to read\nlimit  integer, ≥ 0",
+      "Description",
+      "Read a file from the local filesystem.\n\nUsage:\n- Use absolute paths.",
       "↑/↓ scroll · pgup/pgdn page · home/end · esc back",
     ].join("\n"),
   );
@@ -232,7 +232,66 @@ test("a failed read closes the loading dialog with a toast instead of throwing",
   ]);
 });
 
-test("closing the loading dialog discards a late tool list", async () => {
+test("closing the loading dialog aborts the read and discards a late tool list", async () => {
+  let finish: (value: unknown) => void = () => {};
+  let signal: AbortSignal | undefined;
+  const host = await start(
+    client({
+      list: (_input: unknown, options: { signal: AbortSignal }) => {
+        signal = options.signal;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  const running = host.run();
+  await host.settle();
+  assert.equal(host.dialog()?.kind, "alert");
+  await host.escape();
+  assert.equal(signal?.aborted, true);
+  finish({ data: [readTool] });
+  await running;
+  await host.settle();
+  assert.equal(host.dialog(), undefined);
+  assert.deepEqual(host.toasts, []);
+});
+
+test("running /tools again aborts the first read and shows only the second list", async () => {
+  const signals: AbortSignal[] = [];
+  const finishes: ((value: unknown) => void)[] = [];
+  const host = await start(
+    client({
+      list: (_input: unknown, options: { signal: AbortSignal }) => {
+        signals.push(options.signal);
+        return new Promise((resolve) => {
+          finishes.push(resolve);
+        });
+      },
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  const first = host.run();
+  await host.settle();
+  const second = host.run();
+  await host.settle();
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(signals[1].aborted, false);
+  finishes[1]({ data: [bashTool] });
+  finishes[0]({ data: [readTool] });
+  await Promise.all([first, second]);
+  await host.settle();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  assert.deepEqual(
+    list.props.options.map((option) => option.title),
+    ["bash"],
+  );
+});
+
+test("leaving the session while tools load closes the loading dialog", async () => {
   let finish: (value: unknown) => void = () => {};
   const host = await start(
     client({
@@ -246,12 +305,91 @@ test("closing the loading dialog discards a late tool list", async () => {
   const running = host.run();
   await host.settle();
   assert.equal(host.dialog()?.kind, "alert");
-  await host.escape();
+  host.route.name = "session";
+  host.route.params = { sessionID: "ses_2" };
   finish({ data: [readTool] });
   await running;
   await host.settle();
   assert.equal(host.dialog(), undefined);
-  assert.deepEqual(host.toasts, []);
+});
+
+test("choosing a tool after leaving the session closes the list with a hint", async () => {
+  const host = await start(client(), { config: { model: "openai/gpt-5" } });
+  await host.run();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  host.route.name = "session";
+  host.route.params = { sessionID: "ses_2" };
+  list.props.onSelect?.(list.props.options[0]);
+  await host.settle();
+  assert.equal(host.dialog(), undefined);
+  assert.match(host.toasts.at(-1)?.message ?? "", /run \/tools again/);
+});
+
+test("a configured model whose provider isn't connected gives way to the provider default", async () => {
+  const sdk = client();
+  const host = await start(sdk, {
+    config: { model: "openai/gpt-5" },
+    providers: [{ id: "anthropic" }],
+  });
+  await host.run();
+  assert.deepEqual(sdk.calls, [
+    { directory: "/project", provider: "anthropic", model: "claude-sonnet" },
+  ]);
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  assert.equal(
+    list.props.title,
+    "Tools for anthropic/claude-sonnet (provider default)",
+  );
+});
+
+test("the names-only warning keeps OpenCode's reason", async () => {
+  const host = await start(
+    client({
+      async list() {
+        return { error: { data: { message: "Model not found: gpt-9" } } };
+      },
+    }),
+    { config: { model: "openai/gpt-9" } },
+  );
+  await host.run();
+  assert.match(host.toasts[0]?.message ?? "", /Model not found: gpt-9/);
+});
+
+test("a failure working out the model is reported rather than called no model", async () => {
+  const sdk = client();
+  sdk.config.providers = async () => {
+    throw new Error("server unavailable");
+  };
+  const host = await start(sdk);
+  await host.run();
+  assert.equal(host.dialog()?.kind, "select");
+  assert.match(
+    host.toasts[0]?.message ?? "",
+    /Could not work out the current model \(server unavailable\)/,
+  );
+});
+
+test("connected MCP servers get a note that their tools aren't listed", async () => {
+  const host = await start(client(), {
+    config: { model: "openai/gpt-5" },
+    mcp: [
+      { name: "github", status: "connected" },
+      { name: "broken", status: "failed" },
+    ],
+  });
+  await host.run();
+  assert.equal(host.dialog()?.kind, "select");
+  assert.deepEqual(
+    host.toasts.map((toast) => [toast.variant, toast.message]),
+    [
+      [
+        "info",
+        "Tools from MCP servers (github) aren't listed, because OpenCode only adds them when it runs a prompt.",
+      ],
+    ],
+  );
 });
 
 test("navigating to another session while a tool is open doesn't reopen the list", async () => {

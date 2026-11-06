@@ -3,6 +3,19 @@ export interface ModelChoice {
   modelID: string;
 }
 
+/** Where the browsed model came from, since the next prompt may use another. */
+export type ModelSource = "session" | "configured" | "provider default";
+
+export interface ChosenModel extends ModelChoice {
+  source: ModelSource;
+}
+
+const sourceLabels: Record<ModelSource, string> = {
+  session: "this session's model",
+  configured: "configured model",
+  "provider default": "provider default",
+};
+
 export interface BrowsableTool {
   id: string;
   /** Undefined when OpenCode reported only the tool's id. */
@@ -19,6 +32,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function modelLabel(model: ModelChoice): string {
   return `${model.providerID}/${model.modelID}`;
+}
+
+export function chosenModelLabel(model: ChosenModel): string {
+  return `${modelLabel(model)} (${sourceLabels[model.source]})`;
 }
 
 /** The model of the session's latest user message, which OpenCode resolves tools for on the next prompt. */

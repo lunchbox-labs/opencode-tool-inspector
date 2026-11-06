@@ -8,11 +8,11 @@ import { linesText } from "./schema-text.ts";
 import { type ToolDetail, toolDetail } from "./tool-detail.ts";
 import {
   type BrowsableTool,
-  type ModelChoice,
+  type ChosenModel,
+  chosenModelLabel,
   configuredModel,
   descriptionSummary,
   inputCount,
-  modelLabel,
   providerDefaultModel,
   sessionModel,
   toolsFromIds,
@@ -20,6 +20,8 @@ import {
 } from "./tools.ts";
 
 const toastTitle = "Tool Inspector";
+/** The plain-text fallback can't scroll, so long sections are cut short. */
+const plainTextSectionLines = 20;
 
 type DialogElement = ReturnType<TuiPluginApi["ui"]["DialogAlert"]>;
 type DialogSize = TuiPluginApi["ui"]["dialog"]["size"];
@@ -27,13 +29,46 @@ type DetailRenderer = (detail: ToolDetail) => DialogElement;
 
 interface ToolCatalog {
   tools: BrowsableTool[];
-  model: ModelChoice | undefined;
+  model: ChosenModel | undefined;
   /** Why the list has names only, shown once as a toast. */
   notice: string | undefined;
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null) {
+    const record = error as { message?: unknown; data?: { message?: unknown } };
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+    if (typeof record.data?.message === "string") {
+      return record.data.message;
+    }
+    return JSON.stringify(error);
+  }
+  return String(error);
+}
+
+/** Names of connected MCP servers, whose tools OpenCode's tool list leaves out. */
+function connectedMcpServers(api: TuiPluginApi): string[] {
+  try {
+    return api.state
+      .mcp()
+      .filter((server) => server.status === "connected")
+      .map((server) => server.name);
+  } catch {
+    return [];
+  }
+}
+
+function mcpNotice(servers: readonly string[]): string | undefined {
+  if (servers.length === 0) {
+    return undefined;
+  }
+  const names = servers.join(", ");
+  return `Tools from MCP servers (${names}) aren't listed, because OpenCode only adds them when it runs a prompt.`;
 }
 
 function currentSessionId(api: TuiPluginApi): string | undefined {
@@ -46,26 +81,41 @@ function currentSessionId(api: TuiPluginApi): string | undefined {
 async function chooseModel(
   api: TuiPluginApi,
   signal: AbortSignal,
-): Promise<ModelChoice | undefined> {
+): Promise<ChosenModel | undefined> {
   const sessionId = currentSessionId(api);
   const fromSession =
     sessionId === undefined
       ? undefined
       : sessionModel(api.state.session.messages(sessionId));
-  const chosen = fromSession ?? configuredModel(api.state.config.model);
-  if (chosen !== undefined) {
-    return chosen;
+  if (fromSession !== undefined) {
+    return { ...fromSession, source: "session" };
+  }
+  const connectedProviderIds = api.state.provider.map(
+    (provider) => provider.id,
+  );
+  const configured = configuredModel(api.state.config.model);
+  // OpenCode skips a configured model whose provider isn't connected.
+  if (
+    configured !== undefined &&
+    (connectedProviderIds.length === 0 ||
+      connectedProviderIds.includes(configured.providerID))
+  ) {
+    return { ...configured, source: "configured" };
   }
   const response = await api.client.config.providers(
     { directory: api.state.path.directory },
     { signal },
   );
-  return response.error === undefined
-    ? providerDefaultModel(
-        api.state.provider.map((provider) => provider.id),
-        response.data.default,
-      )
-    : undefined;
+  if (response.error !== undefined) {
+    throw new Error(errorText(response.error));
+  }
+  const fallback = providerDefaultModel(
+    connectedProviderIds,
+    response.data.default,
+  );
+  return fallback === undefined
+    ? undefined
+    : { ...fallback, source: "provider default" };
 }
 
 async function readCatalog(
@@ -73,7 +123,11 @@ async function readCatalog(
   signal: AbortSignal,
 ): Promise<ToolCatalog> {
   const directory = api.state.path.directory;
-  const model = await chooseModel(api, signal).catch(() => undefined);
+  let modelFailure: string | undefined;
+  const model = await chooseModel(api, signal).catch((error: unknown) => {
+    modelFailure = errorText(error);
+    return undefined;
+  });
   let listFailure: string | undefined;
   if (model !== undefined) {
     try {
@@ -81,10 +135,14 @@ async function readCatalog(
         { directory, provider: model.providerID, model: model.modelID },
         { signal },
       );
-      const tools =
-        response.error === undefined ? toolsFromList(response.data) : undefined;
-      if (tools !== undefined) {
-        return { tools, model, notice: undefined };
+      if (response.error === undefined) {
+        const tools = toolsFromList(response.data);
+        if (tools !== undefined) {
+          return { tools, model, notice: undefined };
+        }
+        listFailure = "the response wasn't a tool list";
+      } else {
+        listFailure = errorText(response.error);
       }
     } catch (error) {
       listFailure = errorText(error);
@@ -95,17 +153,20 @@ async function readCatalog(
     response.error === undefined ? toolsFromIds(response.data) : undefined;
   if (tools === undefined) {
     throw new Error(
-      listFailure ?? "OpenCode did not return a readable tool list.",
+      listFailure ??
+        modelFailure ??
+        (response.error === undefined
+          ? "OpenCode did not return a readable tool list."
+          : errorText(response.error)),
     );
   }
-  return {
-    tools,
-    model: undefined,
-    notice:
-      model === undefined
+  const namesOnly =
+    model === undefined
+      ? modelFailure === undefined
         ? "No model is selected, so this lists every registered tool without details. Pick a model to see what OpenCode offers it."
-        : `OpenCode did not return tool details for ${modelLabel(model)}, so this lists tool names only.`,
-  };
+        : `Could not work out the current model (${modelFailure}), so this lists tool names only.`
+      : `OpenCode did not return tool details for ${chosenModelLabel(model)} (${listFailure ?? "no reason given"}), so this lists tool names only.`;
+  return { tools, model: undefined, notice: namesOnly };
 }
 
 function inputCountLabel(tool: BrowsableTool): string | undefined {
@@ -141,6 +202,16 @@ function registerToolBrowser(api: TuiPluginApi): void {
   /** Each displayed dialog gets a revision, so stale close callbacks and late reads are ignored. */
   let revision = 0;
   let showing = false;
+  /** The read behind the loading dialog, aborted once anything replaces that dialog. */
+  let activeRead: AbortController | undefined;
+
+  const close = () => {
+    revision++;
+    showing = false;
+    activeRead?.abort();
+    activeRead = undefined;
+    api.ui.dialog.clear();
+  };
 
   const viewContext = () => {
     const directory = api.state.path.directory;
@@ -160,6 +231,8 @@ function registerToolBrowser(api: TuiPluginApi): void {
   ): number => {
     const active = ++revision;
     showing = true;
+    activeRead?.abort();
+    activeRead = undefined;
     api.ui.dialog.replace(render, () => {
       if (active !== revision) {
         return;
@@ -178,7 +251,9 @@ function registerToolBrowser(api: TuiPluginApi): void {
       const sameView = viewContext();
       const detail = toolDetail(
         tool,
-        catalog.model === undefined ? undefined : modelLabel(catalog.model),
+        catalog.model === undefined
+          ? undefined
+          : chosenModelLabel(catalog.model),
       );
       const render = await detailViewer();
       if (listRevision !== revision || !sameView()) {
@@ -192,7 +267,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
                 message: detail.sections
                   .map(
                     (section) =>
-                      `${section.heading}\n${linesText(section.lines)}`,
+                      `${section.heading}\n${linesText(section.lines.slice(0, plainTextSectionLines))}${section.lines.length > plainTextSectionLines ? "\n…" : ""}`,
                   )
                   .join("\n\n"),
               })
@@ -222,7 +297,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
             title:
               catalog.model === undefined
                 ? "Tools"
-                : `Tools for ${modelLabel(catalog.model)}`,
+                : `Tools for ${chosenModelLabel(catalog.model)}`,
             placeholder: "Search tools",
             current,
             options: catalog.tools.map((tool) => {
@@ -239,7 +314,12 @@ function registerToolBrowser(api: TuiPluginApi): void {
               const tool = catalog.tools.find(
                 (item) => item.id === option.value,
               );
-              if (tool !== undefined && sameView()) {
+              if (!sameView()) {
+                close();
+                toast("info", "The session changed, so run /tools again.");
+                return;
+              }
+              if (tool !== undefined) {
                 views.detail(catalog, tool).catch((error: unknown) => {
                   toast(
                     "warning",
@@ -268,33 +348,43 @@ function registerToolBrowser(api: TuiPluginApi): void {
       "medium",
       abort,
     );
+    activeRead = controller;
     // Load the viewer alongside the list so opening a tool doesn't wait for it.
     detailViewer().catch(() => undefined);
     try {
       const catalog = await readCatalog(api, controller.signal);
-      if (loading !== revision || !sameView()) {
+      if (loading !== revision) {
+        return;
+      }
+      if (!sameView()) {
+        close();
         return;
       }
       if (catalog.tools.length === 0) {
-        revision++;
-        showing = false;
-        api.ui.dialog.clear();
+        close();
         toast("info", "OpenCode reported no tools.");
         return;
       }
-      if (catalog.notice !== undefined) {
-        toast("warning", catalog.notice);
+      const notices = [
+        catalog.notice,
+        mcpNotice(connectedMcpServers(api)),
+      ].filter((notice) => notice !== undefined);
+      if (notices.length > 0) {
+        toast(
+          catalog.notice === undefined ? "info" : "warning",
+          notices.join(" "),
+        );
       }
       views.list(catalog, undefined);
     } catch (error) {
-      if (loading === revision && sameView()) {
-        revision++;
-        showing = false;
-        api.ui.dialog.clear();
-        toast(
-          "warning",
-          `Could not read tools from OpenCode: ${errorText(error)}`,
-        );
+      if (loading === revision) {
+        close();
+        if (sameView()) {
+          toast(
+            "warning",
+            `Could not read tools from OpenCode: ${errorText(error)}`,
+          );
+        }
       }
     } finally {
       api.lifecycle.signal.removeEventListener("abort", abort);
@@ -321,9 +411,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
   });
   const stopWatching = api.event.on("server.instance.disposed", (event) => {
     if (event.properties.directory === api.state.path.directory && showing) {
-      revision++;
-      showing = false;
-      api.ui.dialog.clear();
+      close();
     }
   });
   api.lifecycle.onDispose(() => {

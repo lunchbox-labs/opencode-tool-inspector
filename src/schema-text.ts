@@ -12,6 +12,7 @@ type JsonObject = Record<string, unknown>;
 
 const indentWidth = 2;
 const maximumDepth = 8;
+const maximumLines = 400;
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -45,6 +46,14 @@ function withoutReference(node: JsonObject): JsonObject {
   return rest;
 }
 
+function decodedPointerKey(rawKey: string): string {
+  try {
+    return decodeURIComponent(rawKey);
+  } catch {
+    return rawKey;
+  }
+}
+
 /** Resolves local `$ref`s, as zod and MCP servers emit for shared definitions. */
 function resolveReference(
   node: JsonObject,
@@ -60,7 +69,7 @@ function resolveReference(
   }
   let target: unknown = root;
   for (const rawKey of reference.slice(1).split("/").filter(Boolean)) {
-    const key = decodeURIComponent(rawKey)
+    const key = decodedPointerKey(rawKey)
       .replaceAll("~1", "/")
       .replaceAll("~0", "~");
     target = isObject(target) ? target[key] : undefined;
@@ -75,18 +84,63 @@ function resolveReference(
 }
 
 function referenceName(reference: string): string {
-  return reference.split("/").at(-1) ?? reference;
+  const name = reference.split("/").at(-1) ?? "";
+  return name === "" || name === "#" ? "the whole input" : name;
+}
+
+function nonEmptyList(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value) && value.length > 0) {
+    const items: unknown[] = value;
+    return items;
+  }
+  return undefined;
 }
 
 function variants(node: JsonObject): unknown[] | undefined {
-  for (const key of ["anyOf", "oneOf"] as const) {
-    const value = node[key];
-    if (Array.isArray(value) && value.length > 0) {
-      const alternatives: unknown[] = value;
-      return alternatives;
+  return nonEmptyList(node.anyOf) ?? nonEmptyList(node.oneOf);
+}
+
+function hasCombinators(node: JsonObject): boolean {
+  return variants(node) !== undefined || nonEmptyList(node.allOf) !== undefined;
+}
+
+/** Folds `allOf` members' properties and required names into one object schema. */
+function mergedAllOf(
+  node: JsonObject,
+  root: JsonObject,
+  visiting: ReadonlySet<string>,
+): JsonObject {
+  const members = nonEmptyList(node.allOf);
+  if (members === undefined) {
+    return node;
+  }
+  const properties: JsonObject = {};
+  const required = new Set<unknown>();
+  for (const member of [...members, node]) {
+    if (!isObject(member)) {
+      continue;
+    }
+    const resolved = resolveReference(member, root, visiting);
+    const memberNode =
+      member === node
+        ? member
+        : resolved.recursive
+          ? {}
+          : mergedAllOf(resolved.node, root, visiting);
+    if (isObject(memberNode.properties)) {
+      Object.assign(properties, memberNode.properties);
+    }
+    if (Array.isArray(memberNode.required)) {
+      const memberRequired: unknown[] = memberNode.required;
+      for (const name of memberRequired) {
+        required.add(name);
+      }
     }
   }
-  return undefined;
+  const { allOf: _allOf, ...rest } = node;
+  return Object.keys(properties).length === 0
+    ? rest
+    : { ...rest, properties, required: [...required] };
 }
 
 function pluralType(type: string): string {
@@ -111,6 +165,9 @@ function typeName(
   ) {
     return "any";
   }
+  if (schema === false) {
+    return "never";
+  }
   if (!isObject(schema)) {
     return "unknown";
   }
@@ -121,11 +178,11 @@ function typeName(
   if (resolved.recursive && resolved.reference !== undefined) {
     return referenceName(resolved.reference);
   }
-  const node = resolved.node;
   const nextVisiting =
     resolved.reference === undefined
       ? visiting
       : new Set([...visiting, resolved.reference]);
+  const node = mergedAllOf(resolved.node, root, nextVisiting);
   const nestedName = (nested: unknown) =>
     typeName(nested, root, nextVisiting, depth + 1);
   const arrayName = () => {
@@ -150,10 +207,10 @@ function typeName(
   }
   const type = node.type;
   if (Array.isArray(type)) {
-    return type
+    const names = type
       .filter((item): item is string => typeof item === "string")
-      .map((item) => (item === "array" ? arrayName() : item))
-      .join(" | ");
+      .map((item) => (item === "array" ? arrayName() : item));
+    return names.length === 0 ? "any" : names.join(" | ");
   }
   if (type === "array") {
     return arrayName();
@@ -200,7 +257,7 @@ function constraintNotes(node: JsonObject): string[] {
     notes.push(`format ${node.format}`);
   }
   if (typeof node.pattern === "string") {
-    notes.push(`pattern ${node.pattern}`);
+    notes.push(`pattern ${literal(node.pattern)}`);
   }
   if (Object.hasOwn(node, "default")) {
     notes.push(`default ${literal(node.default)}`);
@@ -225,14 +282,15 @@ function nestedObject(
     resolved.reference === undefined
       ? visiting
       : new Set([...visiting, resolved.reference]);
-  if (isObject(resolved.node.properties)) {
-    return { node: resolved.node, visiting: nextVisiting };
+  const merged = mergedAllOf(resolved.node, root, nextVisiting);
+  if (isObject(merged.properties)) {
+    return { node: merged, visiting: nextVisiting };
   }
-  const items = resolved.node.items;
+  const items = merged.items;
   if (isObject(items)) {
     return nestedObject(items, root, nextVisiting);
   }
-  const alternatives = variants(resolved.node);
+  const alternatives = variants(merged);
   if (alternatives !== undefined) {
     const objects = alternatives
       .filter(isObject)
@@ -265,7 +323,11 @@ function propertyLines(
   );
   return Object.entries(properties).flatMap(([name, property]) => {
     const resolved = isObject(property)
-      ? resolveReference(property, root, visiting).node
+      ? mergedAllOf(
+          resolveReference(property, root, visiting).node,
+          root,
+          visiting,
+        )
       : {};
     const details = [
       typeName(property, root, visiting, depth),
@@ -290,13 +352,51 @@ function propertyLines(
   });
 }
 
-/** Renders a tool's input JSON schema as indented, readable lines. */
-export function schemaLines(schema: unknown): TextLine[] {
-  if (!isObject(schema)) {
-    return [
-      [{ text: "OpenCode did not report an input schema.", tone: "muted" }],
-    ];
+function muted(text: string): TextSegment {
+  return { text, tone: "muted" };
+}
+
+/** One block per alternative input shape, for schemas whose root is a union. */
+function variantLines(
+  alternatives: readonly unknown[],
+  root: JsonObject,
+): TextLine[] {
+  return alternatives.flatMap((variant, index) => {
+    const heading: TextLine = [{ text: `Option ${index + 1}`, tone: "name" }];
+    const nested = isObject(variant)
+      ? nestedObject(variant, root, new Set())
+      : undefined;
+    const lines =
+      nested === undefined
+        ? []
+        : propertyLines(nested.node, root, nested.visiting, 1);
+    if (lines.length > 0) {
+      return [heading, ...lines];
+    }
+    return [[...heading, muted(`  ${typeName(variant, root, new Set(), 0)}`)]];
+  });
+}
+
+function rawSchemaLines(schema: JsonObject): TextLine[] {
+  return [
+    [muted("OpenCode reported this input schema:")],
+    ...JSON.stringify(schema, undefined, indentWidth)
+      .split("\n")
+      .map((line) => [muted(line)]),
+  ];
+}
+
+function capped(lines: TextLine[]): TextLine[] {
+  if (lines.length <= maximumLines) {
+    return lines;
   }
+  return [
+    ...lines.slice(0, maximumLines),
+    [muted(`… ${lines.length - maximumLines} more lines not shown.`)],
+  ];
+}
+
+function rootLines(schema: JsonObject): TextLine[] {
   const nested = nestedObject(schema, schema, new Set());
   if (nested !== undefined) {
     const lines = propertyLines(nested.node, schema, nested.visiting, 0);
@@ -304,11 +404,37 @@ export function schemaLines(schema: unknown): TextLine[] {
       return lines;
     }
   }
+  const resolved = resolveReference(schema, schema, new Set()).node;
+  const alternatives = variants(mergedAllOf(resolved, schema, new Set()));
+  const informative = alternatives?.some((variant) => {
+    const type = typeName(variant, schema, new Set(), 0);
+    return (
+      (type !== "object" && type !== "any") ||
+      (isObject(variant) &&
+        nestedObject(variant, schema, new Set()) !== undefined)
+    );
+  });
+  if (alternatives !== undefined && informative === true) {
+    return [
+      [muted("Takes one of these inputs:")],
+      ...variantLines(alternatives, schema),
+    ];
+  }
   const type = typeName(schema, schema, new Set(), 0);
   if (type === "object" || type === "any") {
-    return [[{ text: "Takes no input.", tone: "muted" }]];
+    return hasCombinators(resolved)
+      ? rawSchemaLines(schema)
+      : [[muted("Takes no input.")]];
   }
   return [[plain("Input is "), { text: type, tone: "name" }]];
+}
+
+/** Renders a tool's input JSON schema as indented, readable lines. */
+export function schemaLines(schema: unknown): TextLine[] {
+  if (!isObject(schema)) {
+    return [[muted("OpenCode did not report an input schema.")]];
+  }
+  return capped(rootLines(schema));
 }
 
 export function linesText(lines: readonly TextLine[]): string {

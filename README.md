@@ -14,8 +14,8 @@ Add the package to `plugin` in `tui.jsonc`:
 
 ## Browse tools
 
-Run `/tools`, or **Browse tools** from the command palette, to list the tools OpenCode offers a model: the one the current session's latest message used, otherwise your configured `model`, otherwise the first connected provider's default. The dialog's title names the model.
+Run `/tools`, or **Browse tools** from the command palette, to list the tools OpenCode offers a model: the one the current session's latest message used, otherwise your configured `model`, otherwise the first connected provider's default. The dialog's title names the model and where it came from. If you switch models before your next prompt, the tools offered may differ.
 
-Type to filter the list, and press Enter to see a tool's full description and its input schema: each input's type, whether it's required, its allowed values, default and limits, with nested objects shown under their parent. Escape returns to the list.
+Type to filter the list, and press Enter to see a tool's input schema and full description: each input's type, whether it's required, its allowed values, default and limits, with nested objects shown under their parent. Escape returns to the list.
 
-The list includes built-in, plugin and MCP tools, but isn't filtered by agent: an agent's permissions can still deny a tool shown here. If OpenCode can't resolve tools for a model, the list shows tool names only.
+The list includes built-in and plugin tools. MCP server tools aren't listed, because OpenCode only adds them when it runs a prompt; a toast says so when an MCP server is connected. The list also isn't filtered by agent: an agent's permissions can still deny a tool shown here. If OpenCode can't resolve tools for a model, the list shows tool names only.

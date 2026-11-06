@@ -38,6 +38,13 @@ export function toolDetail(
       modelLabel === undefined ? undefined : `As offered to ${modelLabel}`,
     sections: [
       {
+        heading: "Input",
+        lines:
+          tool.description === undefined && tool.parameters === undefined
+            ? muted(detailsMissing)
+            : schemaLines(tool.parameters),
+      },
+      {
         heading: "Description",
         lines:
           tool.description === undefined
@@ -45,13 +52,6 @@ export function toolDetail(
             : tool.description.trim() === ""
               ? muted("No description.")
               : textLines(tool.description),
-      },
-      {
-        heading: "Input",
-        lines:
-          tool.description === undefined && tool.parameters === undefined
-            ? muted(detailsMissing)
-            : schemaLines(tool.parameters),
       },
     ],
   };

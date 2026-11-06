@@ -72,6 +72,7 @@ export function fakeHost(
     providers?: { id: string }[];
     messages?: Record<string, unknown[]>;
     route?: { name: string; params?: Record<string, unknown> };
+    mcp?: { name: string; status: string }[];
   } = {},
 ): FakeHost {
   const controller = new AbortController();
@@ -109,6 +110,7 @@ export function fakeHost(
       session: {
         messages: (sessionID: string) => options.messages?.[sessionID] ?? [],
       },
+      mcp: () => options.mcp ?? [],
     },
     client,
     lifecycle: {
