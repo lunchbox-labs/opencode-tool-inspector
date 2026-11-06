@@ -56,7 +56,7 @@ test("hidden custom agents are labelled, OpenCode's hidden agents are left out, 
       { name: "broken", mode: "primary", permission: "nope" },
     ]),
     [
-      "broken  primary: unknown, its permissions couldn't be read",
+      "broken  primary: unknown, permissions couldn't be read",
       "reviewer  subagent, hidden: allowed",
     ].join("\n"),
   );

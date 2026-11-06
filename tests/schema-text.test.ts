@@ -364,3 +364,35 @@ test("properties shared by every option are listed before the options", () => {
     ].join("\n"),
   );
 });
+
+test("nullable unions list each option's fields, directly and inside array items", () => {
+  const union = {
+    anyOf: [
+      { type: "object", properties: { path: { type: "string" } } },
+      { type: "object", properties: { url: { type: "string" } } },
+    ],
+  };
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        target: { anyOf: [union, { type: "null" }] },
+        targets: {
+          anyOf: [{ type: "array", items: union }, { type: "null" }],
+        },
+      },
+    }),
+    [
+      "target  object | null",
+      "  Option 1",
+      "    path  string",
+      "  Option 2",
+      "    url  string",
+      "targets  array of objects | null",
+      "  Option 1",
+      "    path  string",
+      "  Option 2",
+      "    url  string",
+    ].join("\n"),
+  );
+});

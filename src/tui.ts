@@ -156,7 +156,8 @@ async function readAgents(
 
 /**
  * The permission rules of the current session's top-level session, which OpenCode applies after
- * each agent's own rules. Sessions usually have none.
+ * each agent's own rules. Sessions usually have none. When a parent isn't loaded, the topmost
+ * session found is used, since a child session carries copies of its parent's deny rules.
  */
 function sessionPermission(api: TuiPluginApi): unknown {
   const sessionId = currentSessionId(api);
@@ -168,7 +169,11 @@ function sessionPermission(api: TuiPluginApi): unknown {
     const seen = new Set<string>();
     while (session?.parentID !== undefined && !seen.has(session.id)) {
       seen.add(session.id);
-      session = api.state.session.get(session.parentID);
+      const parent = api.state.session.get(session.parentID);
+      if (parent === undefined) {
+        break;
+      }
+      session = parent;
     }
     return session?.permission ?? [];
   } catch {

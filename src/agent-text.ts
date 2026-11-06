@@ -34,7 +34,7 @@ function indent(depth: number): string {
 
 function decisionSummary(decision: AccessDecision): string {
   if (decision.access === "unknown") {
-    return "unknown, its permissions couldn't be read";
+    return "unknown, permissions couldn't be read";
   }
   if (decision.offeredToModel === false) {
     return "not offered to the model";

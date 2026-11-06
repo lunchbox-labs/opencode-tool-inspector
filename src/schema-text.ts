@@ -287,7 +287,7 @@ function nestedObject(
       ? visiting
       : new Set([...visiting, resolved.reference]);
   const merged = mergedAllOf(resolved.node, root, nextVisiting);
-  // An empty `properties` beside a union, as zod emits for a discriminated union, defers to the union.
+  // An empty `properties` beside a union, as some schema generators emit, defers to the union.
   if (
     isObject(merged.properties) &&
     (Object.keys(merged.properties).length > 0 ||
@@ -355,6 +355,13 @@ function objectUnion(
   const merged = mergedAllOf(resolved.node, root, nextVisiting);
   if (listedObjectVariants(merged, root, nextVisiting) > 1) {
     return { node: merged, visiting: nextVisiting };
+  }
+  // A nullable union wraps the union beside a null option.
+  const present = (variants(merged) ?? []).filter(
+    (variant) => !(isObject(variant) && variant.type === "null"),
+  );
+  if (present.length === 1 && isObject(present[0])) {
+    return objectUnion(present[0], root, nextVisiting);
   }
   return isObject(merged.items)
     ? objectUnion(merged.items, root, nextVisiting)

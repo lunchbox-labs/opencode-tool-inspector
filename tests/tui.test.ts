@@ -555,3 +555,61 @@ test("agents are still listed when the tool list has names only", async () => {
   const text = await openDetail(host, "websearch");
   assert.match(text, /Agents\nbuild {2}primary: allowed/);
 });
+
+test("subagents and agents of mode all are denied experimental.primary_tools", async () => {
+  const sdk = client();
+  sdk.app.agents = async () => ({
+    data: [
+      { name: "review", mode: "all", permission: [allowAll] },
+      { name: "docs", mode: "subagent", permission: [allowAll] },
+    ],
+  });
+  const host = await start(sdk, {
+    config: {
+      model: "openai/gpt-5",
+      experimental: { primary_tools: ["bash"] },
+    },
+  });
+  const text = await openDetail(host, "bash");
+  assert.match(
+    text,
+    /review {2}primary or subagent: allowed\n {2}as a subagent: not offered to the model\ndocs {2}subagent: not offered to the model/,
+  );
+});
+
+test("an agents response that isn't a list or is an error leaves agents out with a toast", async () => {
+  for (const response of [
+    { data: { agents: [] } },
+    { error: { name: "NotFound" } },
+  ]) {
+    const sdk = client();
+    sdk.app.agents = async () => response;
+    const host = await start(sdk, { config: { model: "openai/gpt-5" } });
+    const text = await openDetail(host, "read");
+    assert.doesNotMatch(text, /Agents/);
+    assert.match(
+      host.toasts[0]?.message ?? "",
+      /Could not read OpenCode's agents/,
+    );
+  }
+});
+
+test("a child session whose parent isn't loaded uses its own copied rules, and parent cycles end", async () => {
+  const deny = [{ permission: "bash", pattern: "*", action: "deny" }];
+  const cases: Record<string, Record<string, unknown>>[] = [
+    { ses_child: { id: "ses_child", parentID: "ses_gone", permission: deny } },
+    {
+      ses_child: { id: "ses_child", parentID: "ses_loop", permission: deny },
+      ses_loop: { id: "ses_loop", parentID: "ses_child", permission: deny },
+    },
+  ];
+  for (const sessions of cases) {
+    const host = await start(client(), {
+      config: { model: "openai/gpt-5" },
+      route: { name: "session", params: { sessionID: "ses_child" } },
+      sessions,
+    });
+    const text = await openDetail(host, "bash");
+    assert.match(text, /build {2}primary: not offered to the model/);
+  }
+});
