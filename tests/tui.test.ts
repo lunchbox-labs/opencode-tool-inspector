@@ -1,0 +1,282 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { fakeHost } from "./tui-harness.ts";
+import plugin from "../src/tui.ts";
+
+const readTool = {
+  id: "read",
+  description:
+    "Read a file from the local filesystem.\n\nUsage:\n- Use absolute paths.",
+  parameters: {
+    type: "object",
+    properties: {
+      filePath: { type: "string", description: "The absolute path to read" },
+      limit: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    },
+    required: ["filePath"],
+  },
+};
+const bashTool = {
+  id: "bash",
+  description: "- Executes a bash command.\n- Avoids interactive commands.",
+  parameters: {
+    type: "object",
+    properties: { command: { type: "string" } },
+    required: ["command"],
+  },
+};
+
+function client(overrides: Record<string, unknown> = {}) {
+  const calls: Record<string, unknown>[] = [];
+  return {
+    calls,
+    tool: {
+      async list(input: Record<string, unknown>) {
+        calls.push(input);
+        return {
+          data: [
+            readTool,
+            { id: "invalid", description: "Do not use", parameters: {} },
+            bashTool,
+          ],
+        };
+      },
+      async ids() {
+        return { data: ["read", "bash", "invalid", "websearch"] };
+      },
+      ...overrides,
+    },
+    config: {
+      async providers() {
+        return {
+          data: { providers: [], default: { anthropic: "claude-sonnet" } },
+        };
+      },
+    },
+  };
+}
+
+async function start(sdk: unknown, options?: Parameters<typeof fakeHost>[1]) {
+  const host = fakeHost(sdk, options);
+  await plugin.tui(host.api, undefined, {} as never);
+  return host;
+}
+
+test("/tools lists the tools OpenCode offers the configured model, without the internal placeholder", async () => {
+  const sdk = client();
+  const host = await start(sdk, { config: { model: "openai/gpt-5" } });
+  assert.deepEqual(
+    host.commands.map(({ name, slashName, title }) => ({
+      name,
+      slashName,
+      title,
+    })),
+    [
+      {
+        name: "tool-inspector.browse",
+        slashName: "tools",
+        title: "Browse tools",
+      },
+    ],
+  );
+  await host.run();
+  assert.deepEqual(sdk.calls, [
+    { directory: "/project", provider: "openai", model: "gpt-5" },
+  ]);
+  const dialog = host.dialog();
+  assert.equal(dialog?.kind, "select");
+  assert.equal(dialog.props.title, "Tools for openai/gpt-5");
+  assert.deepEqual(
+    dialog.props.options.map(({ title, description, footer }) => ({
+      title,
+      description,
+      footer,
+    })),
+    [
+      {
+        title: "bash",
+        description: "Executes a bash command.",
+        footer: "1 input",
+      },
+      {
+        title: "read",
+        description: "Read a file from the local filesystem.",
+        footer: "2 inputs",
+      },
+    ],
+  );
+  assert.deepEqual(host.toasts, []);
+});
+
+test("the session's latest model wins over the configured one", async () => {
+  const sdk = client();
+  const host = await start(sdk, {
+    config: { model: "openai/gpt-5" },
+    route: { name: "session", params: { sessionID: "ses_1" } },
+    messages: {
+      ses_1: [
+        { role: "user", model: { providerID: "openai", modelID: "gpt-5" } },
+        {
+          role: "user",
+          model: { providerID: "anthropic", modelID: "claude-opus" },
+        },
+        { role: "assistant", providerID: "openai", modelID: "gpt-5" },
+      ],
+    },
+  });
+  await host.run();
+  assert.deepEqual(sdk.calls, [
+    { directory: "/project", provider: "anthropic", model: "claude-opus" },
+  ]);
+});
+
+test("without a configured model the first connected provider's default is used", async () => {
+  const sdk = client();
+  const host = await start(sdk, { providers: [{ id: "anthropic" }] });
+  await host.run();
+  assert.deepEqual(sdk.calls, [
+    { directory: "/project", provider: "anthropic", model: "claude-sonnet" },
+  ]);
+});
+
+test("choosing a tool shows its description and input, and Escape returns to it in the list", async () => {
+  const host = await start(client(), { config: { model: "openai/gpt-5" } });
+  await host.run();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  list.props.onSelect?.(list.props.options[1]);
+  await host.settle();
+  const detail = host.dialog();
+  assert.equal(detail?.kind, "detail");
+  assert.equal(detail.title, "read");
+  assert.equal(
+    detail.text,
+    [
+      "As offered to openai/gpt-5",
+      "Description",
+      "Read a file from the local filesystem.\n\nUsage:\n- Use absolute paths.",
+      "Input",
+      "filePath  string, required\n  The absolute path to read\nlimit  integer, ≥ 0",
+      "↑/↓ scroll · pgup/pgdn page · home/end · esc back",
+    ].join("\n"),
+  );
+  await host.escape();
+  const restored = host.dialog();
+  assert.equal(restored?.kind, "select");
+  assert.equal(restored.props.current, "read");
+  await host.escape();
+  assert.equal(host.dialog(), undefined);
+});
+
+test("when tool details are unavailable the list falls back to names with a warning", async () => {
+  const host = await start(
+    client({
+      async list() {
+        return { error: { name: "BadRequest" } };
+      },
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  await host.run();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  assert.equal(list.props.title, "Tools");
+  assert.deepEqual(
+    list.props.options.map((option) => option.title),
+    ["bash", "read", "websearch"],
+  );
+  assert.deepEqual(
+    host.toasts.map((toast) => toast.variant),
+    ["warning"],
+  );
+  assert.match(host.toasts[0].message, /openai\/gpt-5.*names only/);
+  list.props.onSelect?.(list.props.options[0]);
+  await host.settle();
+  const detail = host.dialog();
+  assert.equal(detail?.kind, "detail");
+  assert.match(detail.text, /OpenCode reported only this tool's name/);
+});
+
+test("with no model at all the registered tool names are listed", async () => {
+  const sdk = client();
+  const host = await start(sdk);
+  await host.run();
+  assert.deepEqual(sdk.calls, []);
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  assert.equal(list.props.options.length, 3);
+  assert.match(host.toasts[0]?.message ?? "", /No model is selected/);
+});
+
+test("a failed read closes the loading dialog with a toast instead of throwing", async () => {
+  const host = await start(
+    client({
+      async list() {
+        throw new Error("connection refused");
+      },
+      async ids() {
+        throw new Error("connection refused");
+      },
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  await host.run();
+  assert.equal(host.dialog(), undefined);
+  assert.deepEqual(host.toasts, [
+    {
+      variant: "warning",
+      title: "Tool Inspector",
+      message: "Could not read tools from OpenCode: connection refused",
+      duration: 10_000,
+    },
+  ]);
+});
+
+test("closing the loading dialog discards a late tool list", async () => {
+  let finish: (value: unknown) => void = () => {};
+  const host = await start(
+    client({
+      list: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  const running = host.run();
+  await host.settle();
+  assert.equal(host.dialog()?.kind, "alert");
+  await host.escape();
+  finish({ data: [readTool] });
+  await running;
+  await host.settle();
+  assert.equal(host.dialog(), undefined);
+  assert.deepEqual(host.toasts, []);
+});
+
+test("navigating to another session while a tool is open doesn't reopen the list", async () => {
+  const host = await start(client(), { config: { model: "openai/gpt-5" } });
+  await host.run();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  list.props.onSelect?.(list.props.options[0]);
+  await host.settle();
+  host.route.name = "session";
+  host.route.params = { sessionID: "ses_2" };
+  await host.escape();
+  assert.equal(host.dialog(), undefined);
+});
+
+test("reloading the project closes an open browser", async () => {
+  const host = await start(client(), { config: { model: "openai/gpt-5" } });
+  await host.run();
+  assert.equal(host.dialog()?.kind, "select");
+  host.emit("server.instance.disposed", {
+    properties: { directory: "/other" },
+  });
+  assert.equal(host.dialog()?.kind, "select");
+  host.emit("server.instance.disposed", {
+    properties: { directory: "/project" },
+  });
+  assert.equal(host.dialog(), undefined);
+});

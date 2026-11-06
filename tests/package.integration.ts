@@ -70,7 +70,13 @@ import tui from '@lunchbox-labs/opencode-tool-inspector/tui';
 assert.equal(tui.id, 'tool-inspector');
 assert.equal(typeof tui.tui, 'function');
 assert.equal(Object.hasOwn(tui, 'server'), false);
-await tui.tui({}, undefined, {});
+const commands = [];
+await tui.tui({
+  keymap: { registerLayer(layer) { commands.push(...(layer.commands ?? [])); return () => {}; } },
+  event: { on() { return () => {}; } },
+  lifecycle: { signal: new AbortController().signal, onDispose() { return () => {}; } },
+}, undefined, {});
+assert.deepEqual(commands.map((command) => command.slashName), ['tools']);
 for (const specifier of ['@lunchbox-labs/opencode-tool-inspector', '@lunchbox-labs/opencode-tool-inspector/server']) {
   await assert.rejects(import(specifier), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' }, specifier);
 }
