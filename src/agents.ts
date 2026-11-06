@@ -56,7 +56,7 @@ export interface AccessDecision {
   /**
    * Access for inputs that no pattern in `exceptions` matches. OpenCode can still ask at call time for
    * paths outside the project (the `external_directory` permission), and an `ask` the user already
-   * answered with "always" is allowed for the rest of the OpenCode process.
+   * answered with "always" may already be allowed for matching calls.
    */
   readonly access: ToolAccess;
   /** Pattern-specific access in OpenCode's precedence order: a later entry wins over an earlier one when both match. */
@@ -278,7 +278,7 @@ function subagentSessionRules(
 ): PermissionRuleInput[] {
   const namesPermission = (permission: string) =>
     agentRules.some((rule) => rule.permission === permission);
-  return [
+  const inherited = [
     ...parentSessionRules.filter(
       (rule) =>
         rule.action === "deny" || rule.permission === "external_directory",
@@ -286,7 +286,17 @@ function subagentSessionRules(
     ...["todowrite", "task"]
       .filter((permission) => !namesPermission(permission))
       .map(denyAll),
-    ...primaryTools.map(denyAll),
+  ];
+  const isInherited = (deny: PermissionRuleInput) =>
+    inherited.some(
+      (rule) =>
+        rule.permission === deny.permission &&
+        rule.pattern === deny.pattern &&
+        rule.action === deny.action,
+    );
+  return [
+    ...inherited,
+    ...primaryTools.map(denyAll).filter((deny) => !isInherited(deny)),
   ];
 }
 

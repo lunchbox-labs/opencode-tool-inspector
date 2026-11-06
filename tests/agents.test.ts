@@ -239,6 +239,18 @@ test("the session's rules apply after the agent's own, and subagents keep only i
   assert.equal(todo.helper.whenSubagent?.access, "deny");
 });
 
+test("a subagent's primary tool deny isn't repeated when the session already has it", () => {
+  const { reviewer } = accessFor(
+    "bash",
+    [{ name: "reviewer", mode: "subagent", permission: [rule("*", "allow")] }],
+    {
+      sessionPermission: [rule("bash", "deny"), rule("bash", "deny", "rm *")],
+      primaryTools: ["bash"],
+    },
+  );
+  assert.deepEqual([reviewer.access, reviewer.offeredToModel], ["deny", true]);
+});
+
 test("a tool stays offered to the model unless its last rule denies every input", () => {
   const { lastDenies, narrowerDenyAfter, onlyPatterns } = accessFor("bash", [
     {
