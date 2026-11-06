@@ -73,6 +73,7 @@ export function fakeHost(
     messages?: Record<string, unknown[]>;
     route?: { name: string; params?: Record<string, unknown> };
     mcp?: { name: string; status: string }[];
+    sessions?: Record<string, Record<string, unknown>>;
   } = {},
 ): FakeHost {
   const controller = new AbortController();
@@ -109,6 +110,7 @@ export function fakeHost(
       path: { directory: "/project", worktree: "/project" },
       session: {
         messages: (sessionID: string) => options.messages?.[sessionID] ?? [],
+        get: (sessionID: string) => options.sessions?.[sessionID],
       },
       mcp: () => options.mcp ?? [],
     },

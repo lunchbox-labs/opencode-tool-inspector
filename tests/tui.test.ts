@@ -26,10 +26,54 @@ const bashTool = {
   },
 };
 
+const allowAll = { permission: "*", pattern: "*", action: "allow" };
+const agents = [
+  {
+    name: "build",
+    mode: "primary",
+    native: true,
+    permission: [
+      allowAll,
+      { permission: "read", pattern: "*.env", action: "ask" },
+    ],
+  },
+  {
+    name: "plan",
+    mode: "primary",
+    native: true,
+    permission: [
+      allowAll,
+      { permission: "bash", pattern: "*", action: "ask" },
+      { permission: "bash", pattern: "git log*", action: "allow" },
+    ],
+  },
+  {
+    name: "explore",
+    mode: "subagent",
+    native: true,
+    permission: [
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "read", pattern: "*", action: "allow" },
+    ],
+  },
+  {
+    name: "compaction",
+    mode: "primary",
+    native: true,
+    hidden: true,
+    permission: [{ permission: "*", pattern: "*", action: "deny" }],
+  },
+];
+
 function client(overrides: Record<string, unknown> = {}) {
   const calls: Record<string, unknown>[] = [];
   return {
     calls,
+    app: {
+      async agents(): Promise<unknown> {
+        return { data: agents };
+      },
+    },
     tool: {
       async list(input: Record<string, unknown>) {
         calls.push(input);
@@ -155,6 +199,14 @@ test("choosing a tool shows its description and input, and Escape returns to it 
       "As offered to openai/gpt-5 (configured model)",
       "Input",
       "filePath  string, required\n  The absolute path to read\nlimit  integer, ≥ 0",
+      "Agents",
+      [
+        "build  primary: allowed",
+        "  asks first for *.env",
+        "plan  primary: allowed",
+        "explore  subagent: allowed",
+        "Patterns match the call's input, such as a command or path; a later line wins.",
+      ].join("\n"),
       "Description",
       "Read a file from the local filesystem.\n\nUsage:\n- Use absolute paths.",
       "↑/↓ scroll · pgup/pgdn page · home/end · esc back",
@@ -417,4 +469,89 @@ test("reloading the project closes an open browser", async () => {
     properties: { directory: "/project" },
   });
   assert.equal(host.dialog(), undefined);
+});
+
+async function openDetail(host: Awaited<ReturnType<typeof start>>, id: string) {
+  await host.run();
+  const list = host.dialog();
+  assert.equal(list?.kind, "select");
+  const option = list.props.options.find((item) => item.value === id);
+  if (option === undefined) {
+    throw new Error(`${id} isn't listed`);
+  }
+  list.props.onSelect?.(option);
+  await host.settle();
+  const detail = host.dialog();
+  assert.equal(detail?.kind, "detail");
+  return detail.text;
+}
+
+test("a tool's detail lists each agent's access, with the patterns that differ", async () => {
+  const host = await start(client(), { config: { model: "openai/gpt-5" } });
+  const text = await openDetail(host, "bash");
+  assert.match(
+    text,
+    /Agents\nbuild {2}primary: allowed\nplan {2}primary: asks first\n {2}allowed for git log\*\nexplore {2}subagent: not offered to the model\n/,
+  );
+  assert.doesNotMatch(text, /compaction/);
+  assert.deepEqual(host.toasts, []);
+});
+
+test("the session's own permission rules apply, from its top-level session", async () => {
+  const host = await start(client(), {
+    config: { model: "openai/gpt-5" },
+    route: { name: "session", params: { sessionID: "ses_child" } },
+    sessions: {
+      ses_child: { id: "ses_child", parentID: "ses_root", permission: [] },
+      ses_root: {
+        id: "ses_root",
+        permission: [{ permission: "bash", pattern: "*", action: "deny" }],
+      },
+    },
+  });
+  const text = await openDetail(host, "bash");
+  assert.match(text, /build {2}primary: not offered to the model/);
+  assert.match(text, /plan {2}primary: not offered to the model/);
+});
+
+test("when agents can't be read the detail opens without them and one toast says why", async () => {
+  const sdk = client();
+  sdk.app.agents = async () => {
+    throw new Error("connection refused");
+  };
+  const host = await start(sdk, { config: { model: "openai/gpt-5" } });
+  const text = await openDetail(host, "read");
+  assert.doesNotMatch(text, /Agents/);
+  assert.match(text, /^Input\n/m);
+  assert.deepEqual(
+    host.toasts.map((toast) => [toast.variant, toast.message]),
+    [
+      [
+        "warning",
+        "Could not read OpenCode's agents (connection refused), so tool details don't show which agents can use each tool.",
+      ],
+    ],
+  );
+});
+
+test("a host without the agents route still opens tool details", async () => {
+  const sdk: Record<string, unknown> = client();
+  delete sdk.app;
+  const host = await start(sdk, { config: { model: "openai/gpt-5" } });
+  const text = await openDetail(host, "read");
+  assert.doesNotMatch(text, /Agents/);
+  assert.match(host.toasts[0]?.message ?? "", /doesn't list agents/);
+});
+
+test("agents are still listed when the tool list has names only", async () => {
+  const host = await start(
+    client({
+      async list() {
+        return { error: { name: "BadRequest" } };
+      },
+    }),
+    { config: { model: "openai/gpt-5" } },
+  );
+  const text = await openDetail(host, "websearch");
+  assert.match(text, /Agents\nbuild {2}primary: allowed/);
 });

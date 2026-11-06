@@ -256,3 +256,111 @@ test("a property that is a union of objects lists each option's fields", () => {
     ].join("\n"),
   );
 });
+
+test("a root object with empty properties beside a union lists each option's fields", () => {
+  const variant = (kind: string, field: string) => ({
+    type: "object",
+    properties: {
+      kind: { type: "string", const: kind },
+      [field]: { type: "string" },
+    },
+    required: ["kind", field],
+    additionalProperties: false,
+  });
+  for (const key of ["anyOf", "oneOf"]) {
+    assert.equal(
+      render({
+        type: "object",
+        properties: {},
+        [key]: [variant("file", "path"), variant("url", "url")],
+      }),
+      [
+        "Takes one of these inputs:",
+        "Option 1",
+        '  kind  "file", required',
+        "  path  string, required",
+        "Option 2",
+        '  kind  "url", required',
+        "  url  string, required",
+      ].join("\n"),
+    );
+  }
+});
+
+test("unions inside array items list each option's fields under the array", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          description: "Edits to apply",
+          items: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { oldString: { type: "string" } },
+                required: ["oldString"],
+              },
+              { $ref: "#/$defs/Insert" },
+            ],
+          },
+        },
+        groups: {
+          type: "array",
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {},
+              oneOf: [
+                { type: "object", properties: { a: { type: "number" } } },
+                { type: "object", properties: { b: { type: "number" } } },
+              ],
+            },
+          },
+        },
+      },
+      $defs: {
+        Insert: { type: "object", properties: { line: { type: "integer" } } },
+      },
+    }),
+    [
+      "edits  array of objects",
+      "  Edits to apply",
+      "  Option 1",
+      "    oldString  string, required",
+      "  Option 2",
+      "    line  integer",
+      "groups  array of items of array of objects",
+      "  Option 1",
+      "    a  number",
+      "  Option 2",
+      "    b  number",
+    ].join("\n"),
+  );
+});
+
+test("properties shared by every option are listed before the options", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: { mode: { type: "string" } },
+      required: ["mode"],
+      oneOf: [
+        { type: "object", properties: { path: { type: "string" } } },
+        { type: "object", properties: { url: { type: "string" } } },
+        { required: ["mode"] },
+      ],
+    }),
+    [
+      "mode  string, required",
+      "And one of:",
+      "Option 1",
+      "  path  string",
+      "Option 2",
+      "  url  string",
+      "Option 3  any",
+    ].join("\n"),
+  );
+});

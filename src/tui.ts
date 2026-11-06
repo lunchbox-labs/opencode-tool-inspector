@@ -3,6 +3,11 @@ import type {
   TuiPluginApi,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui";
+import {
+  type AgentInput,
+  type ToolAgentAccess,
+  resolveToolAgentAccess,
+} from "./agents.ts";
 import { createDetailViewer } from "./detail-viewer.ts";
 import { linesText } from "./schema-text.ts";
 import { type ToolDetail, toolDetail } from "./tool-detail.ts";
@@ -32,7 +37,13 @@ interface ToolCatalog {
   model: ChosenModel | undefined;
   /** Why the list has names only, shown once as a toast. */
   notice: string | undefined;
+  /** Each tool's access per agent, undefined when OpenCode's agents couldn't be read. */
+  access: ReadonlyMap<string, ToolAgentAccess> | undefined;
+  /** Why tool details leave out agents, shown once as a toast. */
+  agentsNotice: string | undefined;
 }
+
+type ToolList = Pick<ToolCatalog, "tools" | "model" | "notice">;
 
 function errorText(error: unknown): string {
   if (error instanceof Error) {
@@ -118,10 +129,83 @@ async function chooseModel(
     : { ...fallback, source: "provider default" };
 }
 
-async function readCatalog(
+async function readAgents(
   api: TuiPluginApi,
   signal: AbortSignal,
-): Promise<ToolCatalog> {
+): Promise<AgentInput[]> {
+  // Guards hosts whose client predates the agents route.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the host supplies the client at runtime.
+  if (typeof api.client.app?.agents !== "function") {
+    throw new Error("this OpenCode doesn't list agents");
+  }
+  const response = await api.client.app.agents(
+    { directory: api.state.path.directory },
+    { signal },
+  );
+  if (response.error !== undefined) {
+    throw new Error(errorText(response.error));
+  }
+  const agents: unknown = response.data;
+  if (!Array.isArray(agents)) {
+    throw new Error("the response wasn't an agent list");
+  }
+  // resolveToolAgentAccess skips entries it can't read.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- entries are validated field by field downstream.
+  return agents as AgentInput[];
+}
+
+/**
+ * The permission rules of the current session's top-level session, which OpenCode applies after
+ * each agent's own rules. Sessions usually have none.
+ */
+function sessionPermission(api: TuiPluginApi): unknown {
+  const sessionId = currentSessionId(api);
+  if (sessionId === undefined) {
+    return [];
+  }
+  try {
+    let session = api.state.session.get(sessionId);
+    const seen = new Set<string>();
+    while (session?.parentID !== undefined && !seen.has(session.id)) {
+      seen.add(session.id);
+      session = api.state.session.get(session.parentID);
+    }
+    return session?.permission ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function primaryTools(api: TuiPluginApi): unknown {
+  try {
+    return api.state.config.experimental?.primary_tools;
+  } catch {
+    return undefined;
+  }
+}
+
+function accessByTool(
+  api: TuiPluginApi,
+  tools: readonly BrowsableTool[],
+  agents: readonly AgentInput[],
+): Map<string, ToolAgentAccess> {
+  const resolved = resolveToolAgentAccess(
+    tools.map((tool) => tool.id),
+    agents,
+    {
+      // The module reads both options defensively and reports unreadable ones as unknown.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- validated in resolveToolAgentAccess.
+      primaryTools: primaryTools(api) as readonly string[] | undefined,
+      sessionPermission: sessionPermission(api),
+    },
+  );
+  return new Map(resolved.map((access) => [access.tool, access]));
+}
+
+async function readToolList(
+  api: TuiPluginApi,
+  signal: AbortSignal,
+): Promise<ToolList> {
   const directory = api.state.path.directory;
   let modelFailure: string | undefined;
   const model = await chooseModel(api, signal).catch((error: unknown) => {
@@ -167,6 +251,35 @@ async function readCatalog(
         : `Could not work out the current model (${modelFailure}), so this lists tool names only.`
       : `OpenCode did not return tool details for ${chosenModelLabel(model)} (${listFailure ?? "no reason given"}), so this lists tool names only.`;
   return { tools, model: undefined, notice: namesOnly };
+}
+
+async function readCatalog(
+  api: TuiPluginApi,
+  signal: AbortSignal,
+): Promise<ToolCatalog> {
+  let agentsFailure: string | undefined;
+  const agentsRead = readAgents(api, signal).catch((error: unknown) => {
+    agentsFailure = errorText(error);
+    return undefined;
+  });
+  const list = await readToolList(api, signal);
+  const agents = await agentsRead;
+  let access: Map<string, ToolAgentAccess> | undefined;
+  if (agents !== undefined) {
+    try {
+      access = accessByTool(api, list.tools, agents);
+    } catch (error) {
+      agentsFailure = errorText(error);
+    }
+  }
+  return {
+    ...list,
+    access,
+    agentsNotice:
+      access === undefined
+        ? `Could not read OpenCode's agents (${agentsFailure ?? "no reason given"}), so tool details don't show which agents can use each tool.`
+        : undefined,
+  };
 }
 
 function inputCountLabel(tool: BrowsableTool): string | undefined {
@@ -254,6 +367,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
         catalog.model === undefined
           ? undefined
           : chosenModelLabel(catalog.model),
+        catalog.access?.get(tool.id),
       );
       const render = await detailViewer();
       if (listRevision !== revision || !sameView()) {
@@ -367,11 +481,14 @@ function registerToolBrowser(api: TuiPluginApi): void {
       }
       const notices = [
         catalog.notice,
+        catalog.agentsNotice,
         mcpNotice(connectedMcpServers(api)),
       ].filter((notice) => notice !== undefined);
       if (notices.length > 0) {
         toast(
-          catalog.notice === undefined ? "info" : "warning",
+          catalog.notice === undefined && catalog.agentsNotice === undefined
+            ? "info"
+            : "warning",
           notices.join(" "),
         );
       }

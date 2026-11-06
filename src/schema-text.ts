@@ -287,7 +287,12 @@ function nestedObject(
       ? visiting
       : new Set([...visiting, resolved.reference]);
   const merged = mergedAllOf(resolved.node, root, nextVisiting);
-  if (isObject(merged.properties)) {
+  // An empty `properties` beside a union, as zod emits for a discriminated union, defers to the union.
+  if (
+    isObject(merged.properties) &&
+    (Object.keys(merged.properties).length > 0 ||
+      variants(merged) === undefined)
+  ) {
     return { node: merged, visiting: nextVisiting };
   }
   const items = merged.items;
@@ -320,7 +325,46 @@ function listedObjectVariants(
   ).length;
 }
 
-/** Lists an object schema's properties, or each option of a union, indented by depth. */
+/** Whether listing a union option says more than "object". */
+function informativeVariant(
+  variant: unknown,
+  root: JsonObject,
+  visiting: ReadonlySet<string>,
+): boolean {
+  const type = typeName(variant, root, visiting, 0);
+  return (
+    (type !== "object" && type !== "any") ||
+    (isObject(variant) && nestedObject(variant, root, visiting) !== undefined)
+  );
+}
+
+/** The union of several object options under a property, following array items, if any. */
+function objectUnion(
+  node: JsonObject,
+  root: JsonObject,
+  visiting: ReadonlySet<string>,
+): { node: JsonObject; visiting: ReadonlySet<string> } | undefined {
+  const resolved = resolveReference(node, root, visiting);
+  if (resolved.recursive) {
+    return undefined;
+  }
+  const nextVisiting =
+    resolved.reference === undefined
+      ? visiting
+      : new Set([...visiting, resolved.reference]);
+  const merged = mergedAllOf(resolved.node, root, nextVisiting);
+  if (listedObjectVariants(merged, root, nextVisiting) > 1) {
+    return { node: merged, visiting: nextVisiting };
+  }
+  return isObject(merged.items)
+    ? objectUnion(merged.items, root, nextVisiting)
+    : undefined;
+}
+
+/**
+ * Lists an object schema's properties, then each option of a union beside them, indented by
+ * depth.
+ */
 function propertyLines(
   objectSchema: JsonObject,
   root: JsonObject,
@@ -330,9 +374,17 @@ function propertyLines(
   if (depth > maximumDepth) {
     return [[plain(`${indentText(depth)}…`)]];
   }
-  const properties = objectSchema.properties;
-  if (!isObject(properties)) {
-    return (variants(objectSchema) ?? []).flatMap((variant, index) => {
+  /** Lists each option of a union, or nothing when no option says more than "object". */
+  const optionLines = (schema: JsonObject): TextLine[] => {
+    const alternatives = variants(schema);
+    if (
+      alternatives?.some((variant) =>
+        informativeVariant(variant, root, visiting),
+      ) !== true
+    ) {
+      return [];
+    }
+    return alternatives.flatMap((variant, index) => {
       const heading: TextLine = [
         plain(indentText(depth)),
         { text: `Option ${index + 1}`, tone: "name" },
@@ -353,6 +405,13 @@ function propertyLines(
             ],
           ];
     });
+  };
+  const properties = isObject(objectSchema.properties)
+    ? Object.entries(objectSchema.properties)
+    : [];
+  const options = optionLines(objectSchema);
+  if (properties.length === 0) {
+    return options;
   }
   const required = new Set(
     Array.isArray(objectSchema.required)
@@ -361,7 +420,7 @@ function propertyLines(
         )
       : [],
   );
-  return Object.entries(properties).flatMap(([name, property]) => {
+  const fields = properties.flatMap(([name, property]) => {
     const resolved = isObject(property)
       ? mergedAllOf(
           resolveReference(property, root, visiting).node,
@@ -382,11 +441,15 @@ function propertyLines(
     const nested = isObject(property)
       ? nestedObject(property, root, visiting)
       : undefined;
+    const union =
+      nested === undefined && isObject(property)
+        ? objectUnion(property, root, visiting)
+        : undefined;
     const childLines =
       nested !== undefined
         ? propertyLines(nested.node, root, nested.visiting, depth + 1)
-        : listedObjectVariants(resolved, root, visiting) > 1
-          ? propertyLines(resolved, root, visiting, depth + 1)
+        : union !== undefined
+          ? propertyLines(union.node, root, union.visiting, depth + 1)
           : [];
     return [
       heading,
@@ -394,6 +457,9 @@ function propertyLines(
       ...childLines,
     ];
   });
+  return options.length === 0
+    ? fields
+    : [...fields, [plain(indentText(depth)), muted("And one of:")], ...options];
 }
 
 function rawSchemaLines(schema: JsonObject): TextLine[] {
@@ -425,14 +491,9 @@ function rootLines(schema: JsonObject): TextLine[] {
   }
   const resolved = resolveReference(schema, schema, new Set()).node;
   const alternatives = variants(mergedAllOf(resolved, schema, new Set()));
-  const informative = alternatives?.some((variant) => {
-    const type = typeName(variant, schema, new Set(), 0);
-    return (
-      (type !== "object" && type !== "any") ||
-      (isObject(variant) &&
-        nestedObject(variant, schema, new Set()) !== undefined)
-    );
-  });
+  const informative = alternatives?.some((variant) =>
+    informativeVariant(variant, schema, new Set()),
+  );
   if (alternatives !== undefined && informative === true) {
     return [
       [muted("Takes one of these inputs:")],
