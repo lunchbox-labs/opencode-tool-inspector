@@ -39,6 +39,8 @@ interface Rendering {
   listedDefinitions: Map<string, DefinitionListing>;
   /** How often the depth limit has cut a listing or type short. */
   depthCutoffs: number;
+  /** Merged `allOf` schemas that left out members nested too deeply to follow. */
+  cutMerges: WeakSet<JsonObject>;
 }
 
 interface DefinitionListing {
@@ -89,9 +91,24 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const literalTexts = new WeakMap<object, string>();
+
+/** A value as JSON, shortened; large strings are cut before encoding and objects encoded once. */
 function literal(value: unknown): string {
-  const json = JSON.stringify(value) as string | undefined;
-  return shortened(json ?? String(value), maximumTypeLength);
+  if (typeof value === "string") {
+    const encoded = JSON.stringify(value.slice(0, maximumTypeLength));
+    return value.length > maximumTypeLength ? `${encoded}…` : encoded;
+  }
+  if (typeof value !== "object" || value === null) {
+    const json = JSON.stringify(value) as string | undefined;
+    return shortened(json ?? String(value), maximumTypeLength);
+  }
+  let text = literalTexts.get(value);
+  if (text === undefined) {
+    text = shortened(JSON.stringify(value), maximumTypeLength);
+    literalTexts.set(value, text);
+  }
+  return text;
 }
 
 /** Names the first few values, leaving out repeated names, then counts the rest. */
@@ -250,9 +267,12 @@ function mergedAllOf(
     return node;
   }
   if (nesting > maximumNesting) {
+    rendering.depthCutoffs++;
     const { allOf: _allOf, ...rest } = node;
+    rendering.cutMerges.add(rest);
     return rest;
   }
+  let cut = false;
   const properties: JsonObject = {};
   const required = new Set<unknown>();
   for (const member of [...members, node]) {
@@ -271,6 +291,7 @@ function mergedAllOf(
               nesting + 1,
             )
           : {};
+      cut ||= rendering.cutMerges.has(memberNode);
     }
     if (isObject(memberNode.properties)) {
       Object.assign(properties, memberNode.properties);
@@ -283,9 +304,14 @@ function mergedAllOf(
     }
   }
   const { allOf: _allOf, ...rest } = node;
-  return Object.keys(properties).length === 0
-    ? rest
-    : { ...rest, properties, required: [...required] };
+  const merged =
+    Object.keys(properties).length === 0
+      ? rest
+      : { ...rest, properties, required: [...required] };
+  if (cut) {
+    rendering.cutMerges.add(merged);
+  }
+  return merged;
 }
 
 function pluralType(type: string): string {
@@ -356,10 +382,19 @@ function typeName(
   }
   const type = node.type;
   if (Array.isArray(type)) {
-    const names = type
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => (item === "array" ? arrayName() : item));
-    return names.length === 0 ? "any" : names.join(" | ");
+    const typeNames = [
+      ...new Set(
+        type.filter((item): item is string => typeof item === "string"),
+      ),
+    ];
+    let array: string | undefined;
+    return typeNames.length === 0
+      ? "any"
+      : namedValues(
+          typeNames,
+          (item) => (item === "array" ? (array ??= arrayName()) : String(item)),
+          " | ",
+        );
   }
   if (type === "array") {
     return arrayName();
@@ -626,9 +661,12 @@ function writeProperties(
         writeFields(fields, path === "" ? name : `${path}.${name}`);
       }
     }
-    if (listedOptions.length > 0) {
-      write(rendering, [plain(indentText(depth)), muted("And one of:")]);
-    }
+  }
+  if (rendering.cutMerges.has(objectSchema)) {
+    write(rendering, [plain(`${indentText(depth)}…`)]);
+  }
+  if (properties.length > 0 && listedOptions.length > 0) {
+    write(rendering, [plain(indentText(depth)), muted("And one of:")]);
   }
   listedOptions.forEach((variant, index) => {
     const heading: TextLine = [
@@ -717,6 +755,7 @@ export function schemaLines(schema: unknown): TextLine[] {
     remainingCharacters: maximumCharacters,
     listedDefinitions: new Map(),
     depthCutoffs: 0,
+    cutMerges: new WeakSet(),
   };
   try {
     return rootLines(rendering, schema);
