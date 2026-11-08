@@ -306,14 +306,21 @@ function typeName(
   const nestedName = (nested: unknown) =>
     typeName(nested, rendering, resolved.visiting, depth + 1);
   const arrayName = () => {
-    if (node.items === undefined) {
-      return "array";
+    // Draft 2020-12 tuples, as zod emits, list their elements in `prefixItems` and any further
+    // elements in `items`; earlier drafts use an `items` list and `additionalItems`.
+    const prefixItems = nonEmptyList(node.prefixItems);
+    const elements = prefixItems ?? nonEmptyList(node.items);
+    if (elements !== undefined) {
+      const tuple = `tuple of ${elements.map(nestedName).join(", ")}`;
+      const rest =
+        prefixItems === undefined ? node.additionalItems : node.items;
+      return isObject(rest) && Object.keys(rest).length > 0
+        ? `${tuple}, then ${pluralType(nestedName(rest))}`
+        : tuple;
     }
-    if (Array.isArray(node.items)) {
-      const items: unknown[] = node.items;
-      return `tuple of ${items.map(nestedName).join(", ")}`;
-    }
-    return `array of ${pluralType(nestedName(node.items))}`;
+    return node.items === undefined || Array.isArray(node.items)
+      ? "array"
+      : `array of ${pluralType(nestedName(node.items))}`;
   };
   if (Object.hasOwn(node, "const")) {
     return literal(node.const);

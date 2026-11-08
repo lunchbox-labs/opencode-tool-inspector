@@ -85,6 +85,37 @@ test("unions, nullable types and maps read as their alternatives", () => {
   );
 });
 
+test("tuples list their element types, then the type of any further elements", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        point: {
+          type: "array",
+          prefixItems: [{ type: "number" }, { type: "string" }],
+        },
+        rest: {
+          type: "array",
+          prefixItems: [{ type: "string" }],
+          items: { type: "number" },
+        },
+        legacy: {
+          type: "array",
+          items: [{ type: "boolean" }],
+          additionalItems: { type: "string" },
+        },
+        empty: { type: "array", items: [] },
+      },
+    }),
+    [
+      "point  tuple of number, string",
+      "rest  tuple of string, then numbers",
+      "legacy  tuple of boolean, then strings",
+      "empty  array",
+    ].join("\n"),
+  );
+});
+
 test("local references are followed and recursive ones are named instead of expanded", () => {
   assert.equal(
     render({
