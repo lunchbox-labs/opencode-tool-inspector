@@ -101,16 +101,16 @@ stateDiagram-v2
 `schemaLines` in `src/schema-text.ts` renders a tool's input schema each time its detail opens, synchronously, keeping a `Rendering` for that call: the lines written, the remaining character and reference-lookup budgets, how often a depth limit cut a listing short, the `allOf` merges that left members out, where each shared definition's fields were listed, and the first field that refers to each definition.
 
 - A missing or non-object schema says OpenCode reported no input schema.
-- Fields are written one line at a time. A line over 400 characters ends in "…", and enum, union, `type` and tuple element lists name their first few values and count the rest. Tuples read their elements from `prefixItems`, or an `items` list, and any further elements from `items` or `additionalItems`. Listings stop at 8 levels with a "…" line, and array items, unions and `allOf` members are followed at most 64 levels, with "…" where `allOf` members were left out.
+- Fields are written one line at a time. A line over 400 characters ends in "…", and enum, union, `type` and tuple element lists name their first few values and count the rest. Tuples read their elements from `prefixItems`, or an `items` list, and any further elements from `items` or `additionalItems`. Listings go 9 levels deep (depths 0 to 8) and write a "…" line below that, and array items, unions and `allOf` members are followed at most 64 levels, with "…" where `allOf` members were left out.
 - Writing a 401st line, or going over 100,000 characters or 50,000 reference lookups, throws `SchemaTooLarge`. If lines were written they end with "… Schema too large to show in full."; otherwise the raw schema shows, cut to 400 lines with a count of the rest. Any other error, such as a stack overflow, also shows the raw schema.
-- A root with no fields to list shows its union options, `Input is <type>`, "Takes no input." or, for combinators that can't be listed, the raw schema.
+- A root union lists each option's fields, under the same limits as any listing. A root with no fields to list shows `Input is <type>`, "Takes no input." or, for combinators that can't be listed, the raw schema.
 
 ```mermaid
 stateDiagram-v2
     [*] --> NoSchema: schema missing or not an object
     [*] --> Listing: detail opened
-    Listing --> Listed: fields written within the limits
-    Listing --> Summary: no fields, root union, type or no input
+    Listing --> Listed: fields or a root union's options written within the limits
+    Listing --> Summary: no fields, only a type or no input
     Listing --> CutShort: line, character or lookup limit after lines were written
     Listing --> RawSchema: limit before any line, unlistable combinators or another error
     NoSchema --> [*]
@@ -136,7 +136,7 @@ stateDiagram-v2
     Following --> Resolved: target found, not being expanded
     Following --> Recursive: target already being expanded
     Following --> Unresolved: not local, or missing under $defs and definitions
-    Following --> ChainTooLong: 64 references in a row
+    Following --> ChainTooLong: more than 64 references in a row
     Resolved --> [*]
     Recursive --> [*]
     Unresolved --> [*]
@@ -164,4 +164,5 @@ stateDiagram-v2
 
 - The plugin registers its keymap layer and a `server.instance.disposed` subscription, and removes both on `api.lifecycle.onDispose`. Dispose aborts a pending read, which closes the loading alert. It does not close a list or detail: the detail view destroys itself on abort, and a list left open answers Enter with the toast to run `/tools` again.
 - `compiledWildcards` in `src/agents.ts` memoizes one regular expression per permission pattern for the process.
+- `literalTexts` in `src/schema-text.ts` is a WeakMap that caches a const or default's shortened text by object identity, across renderings. It is never invalidated, so a schema object the host changes in place keeps its old literal text until it is replaced.
 - The host owns the list's filter and cursor. Returning from a detail restores the cursor on the tool, but not the typed filter.
