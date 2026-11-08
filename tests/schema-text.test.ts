@@ -367,16 +367,18 @@ test("long chains of array items and allOf members are followed only so far", ()
   const chain = (link: (next: string) => Record<string, unknown>) => ({
     type: "object",
     properties: { x: { $ref: "#/definitions/D0" } },
-    definitions: Object.fromEntries([
-      ...Array.from({ length }, (_, index) => [
-        `D${index}`,
-        link(`#/definitions/D${index + 1}`),
-      ]),
-      [
-        `D${length}`,
-        { type: "object", properties: { leaf: { type: "string" } } },
-      ],
-    ]),
+    definitions: {
+      ...Object.fromEntries(
+        Array.from({ length }, (_, index) => [
+          `D${index}`,
+          link(`#/definitions/D${index + 1}`),
+        ]),
+      ),
+      [`D${length}`]: {
+        type: "object",
+        properties: { leaf: { type: "string" } },
+      },
+    },
   });
   const started = performance.now();
   const items = render(

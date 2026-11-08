@@ -307,18 +307,6 @@ function typeName(
   visiting: ReadonlySet<string>,
   depth: number,
 ): string {
-  return shortened(
-    unboundedTypeName(schema, rendering, visiting, depth),
-    maximumTypeLength,
-  );
-}
-
-function unboundedTypeName(
-  schema: unknown,
-  rendering: Rendering,
-  visiting: ReadonlySet<string>,
-  depth: number,
-): string {
   if (
     schema === true ||
     (isObject(schema) && Object.keys(schema).length === 0)
@@ -341,7 +329,10 @@ function unboundedTypeName(
   }
   const node = mergedAllOf(resolved.node, rendering, resolved.visiting);
   const nestedName = (nested: unknown) =>
-    typeName(nested, rendering, resolved.visiting, depth + 1);
+    shortened(
+      typeName(nested, rendering, resolved.visiting, depth + 1),
+      maximumTypeLength,
+    );
   const arrayName = () => {
     if (node.items === undefined) {
       return "array";
