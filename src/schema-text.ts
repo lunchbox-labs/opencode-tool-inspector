@@ -103,43 +103,94 @@ interface Resolved {
   definition?: string;
   /** The reference that points back into a definition being expanded, if this node is one. */
   recursiveReference?: string;
+  /** The reference that names nothing in the schema, if this node has one. */
+  unresolvedReference?: string;
 }
 
-/** Resolves local `$ref`s, as zod and MCP servers emit for shared definitions. */
-function resolveReference(
-  node: JsonObject,
-  rendering: Rendering,
-  visiting: ReadonlySet<string>,
-): Resolved {
-  rendering.remainingLookups--;
-  if (rendering.remainingLookups < 0) {
-    throw new SchemaTooLarge();
-  }
-  const reference = node.$ref;
-  if (typeof reference !== "string" || !reference.startsWith("#")) {
-    return { node, visiting };
-  }
-  if (visiting.has(reference)) {
-    return { node, visiting, recursiveReference: reference };
-  }
-  let target: unknown = rendering.root;
+/** The value a local JSON pointer such as `#/$defs/Address` names, if any. */
+function pointerTarget(root: JsonObject, reference: string): unknown {
+  let target: unknown = root;
   for (const rawKey of reference.slice(1).split("/").filter(Boolean)) {
     const key = decodedPointerKey(rawKey)
       .replaceAll("~1", "/")
       .replaceAll("~0", "~");
     target = isObject(target) ? target[key] : undefined;
   }
-  if (!isObject(target)) {
-    return { node, visiting };
+  return target;
+}
+
+const definitionSections = ["#/$defs/", "#/definitions/"];
+
+/**
+ * The schema a local reference names. OpenCode 1.19 renames zod's `$defs` to `definitions`
+ * without rewriting the references to them, so a miss under either name is retried under the
+ * other.
+ */
+function referenceTarget(
+  root: JsonObject,
+  reference: string,
+): JsonObject | undefined {
+  const target = pointerTarget(root, reference);
+  if (isObject(target)) {
+    return target;
   }
-  const siblings = withoutReference(node);
-  return {
-    node: { ...target, ...siblings },
-    visiting: new Set([...visiting, reference]),
-    ...(Object.keys(siblings).some((key) => shapeKeys.has(key))
-      ? {}
-      : { definition: reference }),
-  };
+  const section = definitionSections.find((prefix) =>
+    reference.startsWith(prefix),
+  );
+  if (section === undefined) {
+    return undefined;
+  }
+  const otherSection = definitionSections.find((prefix) => prefix !== section);
+  const alias = pointerTarget(
+    root,
+    `${otherSection ?? section}${reference.slice(section.length)}`,
+  );
+  return isObject(alias) ? alias : undefined;
+}
+
+function countLookup(rendering: Rendering): void {
+  rendering.remainingLookups--;
+  if (rendering.remainingLookups < 0) {
+    throw new SchemaTooLarge();
+  }
+}
+
+/**
+ * Resolves local `$ref`s, as zod and MCP servers emit for shared definitions, following a
+ * definition that is itself a reference to another.
+ */
+function resolveReference(
+  node: JsonObject,
+  rendering: Rendering,
+  visiting: ReadonlySet<string>,
+): Resolved {
+  countLookup(rendering);
+  let resolved: Resolved = { node, visiting };
+  let reshaped = false;
+  for (
+    let reference = node.$ref;
+    typeof reference === "string";
+    reference = resolved.node.$ref
+  ) {
+    if (resolved.visiting.has(reference)) {
+      return { ...resolved, recursiveReference: reference };
+    }
+    const target = reference.startsWith("#")
+      ? referenceTarget(rendering.root, reference)
+      : undefined;
+    if (target === undefined) {
+      return { ...resolved, unresolvedReference: reference };
+    }
+    countLookup(rendering);
+    const siblings = withoutReference(resolved.node);
+    reshaped ||= Object.keys(siblings).some((key) => shapeKeys.has(key));
+    resolved = {
+      node: { ...target, ...siblings },
+      visiting: new Set([...resolved.visiting, reference]),
+      ...(reshaped ? {} : { definition: reference }),
+    };
+  }
+  return resolved;
 }
 
 function referenceName(reference: string): string {
@@ -236,7 +287,20 @@ function typeName(
   }
   const resolved = resolveReference(schema, rendering, visiting);
   if (resolved.recursiveReference !== undefined) {
-    return referenceName(resolved.recursiveReference);
+    const name = referenceName(resolved.recursiveReference);
+    // Generated names, such as zod's `__schema0` for a recursive schema, mean nothing to users.
+    return name.startsWith("__") ? "object" : name;
+  }
+  if (resolved.unresolvedReference !== undefined) {
+    const known = typeName(
+      withoutReference(resolved.node),
+      rendering,
+      resolved.visiting,
+      depth,
+    );
+    return known === "any"
+      ? `unresolved reference ${referenceName(resolved.unresolvedReference)}`
+      : known;
   }
   const node = mergedAllOf(resolved.node, rendering, resolved.visiting);
   const nestedName = (nested: unknown) =>
@@ -381,6 +445,30 @@ function listedObjectVariants(
   ).length;
 }
 
+/** The definition a property refers back into while it is being listed, following array items. */
+function recursiveDefinition(
+  node: JsonObject,
+  rendering: Rendering,
+  visiting: ReadonlySet<string>,
+): string | undefined {
+  const resolved = resolveReference(node, rendering, visiting);
+  if (resolved.recursiveReference !== undefined) {
+    return resolved.recursiveReference;
+  }
+  const merged = mergedAllOf(resolved.node, rendering, resolved.visiting);
+  const present = (variants(merged) ?? []).filter(
+    (variant) => !(isObject(variant) && variant.type === "null"),
+  );
+  const inner = isObject(merged.items)
+    ? merged.items
+    : present.length === 1 && isObject(present[0])
+      ? present[0]
+      : undefined;
+  return inner === undefined
+    ? undefined
+    : recursiveDefinition(inner, rendering, resolved.visiting);
+}
+
 /** Whether listing a union option says more than "object". */
 function informativeVariant(
   variant: unknown,
@@ -444,17 +532,28 @@ function writeProperties(
    * Lists a field's or option's own fields one level deeper, or, for a shared definition already
    * listed, where its fields are.
    */
-  const writeFields = (source: FieldSource, sourcePath: string) => {
+  const writeListedAt = (definition: string | undefined): boolean => {
     const listedAt =
-      source.definition === undefined
+      definition === undefined
         ? undefined
-        : rendering.listedDefinitions.get(source.definition);
-    if (listedAt !== undefined) {
-      write(rendering, [
-        plain(indentText(depth + 1)),
-        muted(`Same fields as ${listedAt}.`),
-      ]);
+        : rendering.listedDefinitions.get(definition);
+    if (listedAt === undefined) {
+      return false;
+    }
+    write(rendering, [
+      plain(indentText(depth + 1)),
+      muted(`Same fields as ${listedAt}.`),
+    ]);
+    return true;
+  };
+  const writeFields = (source: FieldSource, sourcePath: string) => {
+    const { definition } = source;
+    if (writeListedAt(definition)) {
       return;
+    }
+    const records = definition !== undefined && depth < maximumDepth;
+    if (records) {
+      rendering.listedDefinitions.set(definition, sourcePath);
     }
     const linesBefore = rendering.lines.length;
     writeProperties(
@@ -464,12 +563,8 @@ function writeProperties(
       depth + 1,
       sourcePath,
     );
-    if (
-      source.definition !== undefined &&
-      depth < maximumDepth &&
-      rendering.lines.length > linesBefore
-    ) {
-      rendering.listedDefinitions.set(source.definition, sourcePath);
+    if (records && rendering.lines.length === linesBefore) {
+      rendering.listedDefinitions.delete(definition);
     }
   };
   const alternatives = variants(objectSchema);
@@ -516,6 +611,8 @@ function writeProperties(
         : undefined;
       if (fields !== undefined) {
         writeFields(fields, path === "" ? name : `${path}.${name}`);
+      } else if (isObject(property)) {
+        writeListedAt(recursiveDefinition(property, rendering, visiting));
       }
     }
     if (listedOptions.length > 0) {

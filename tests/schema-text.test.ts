@@ -107,6 +107,102 @@ test("local references are followed and recursive ones are named instead of expa
       "  A tree node",
       "  name  string",
       "  children  array of Nodes",
+      "    Same fields as root.",
+    ].join("\n"),
+  );
+});
+
+test("references into $defs resolve under definitions, as OpenCode serves zod tools", () => {
+  // OpenCode 1.19 renames zod's `$defs` to `definitions` but leaves the references as they were.
+  assert.equal(
+    render({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        home: { $ref: "#/$defs/Address" },
+        work: { $ref: "#/$defs/Address" },
+        tree: { $ref: "#/$defs/__schema0" },
+      },
+      required: ["home", "tree"],
+      definitions: {
+        Address: {
+          id: "Address",
+          type: "object",
+          properties: { street: { type: "string" }, city: { type: "string" } },
+          required: ["street", "city"],
+        },
+        __schema0: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            children: { type: "array", items: { $ref: "#/$defs/__schema0" } },
+          },
+          required: ["name", "children"],
+        },
+      },
+    }),
+    [
+      "home  object, required",
+      "  street  string, required",
+      "  city  string, required",
+      "work  object",
+      "  Same fields as home.",
+      "tree  object, required",
+      "  name  string, required",
+      "  children  array of objects, required",
+      "    Same fields as tree.",
+    ].join("\n"),
+  );
+  assert.equal(
+    render({
+      type: "object",
+      properties: { point: { $ref: "#/definitions/Point" } },
+      $defs: {
+        Point: { type: "object", properties: { x: { type: "number" } } },
+      },
+    }),
+    ["point  object", "  x  number"].join("\n"),
+  );
+});
+
+test("a definition that only refers to another is followed, and a loop of them ends", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        location: { $ref: "#/$defs/Location", description: "Where to look" },
+        loop: { $ref: "#/$defs/A" },
+      },
+      $defs: {
+        Location: { $ref: "#/$defs/Place" },
+        Place: { type: "object", properties: { name: { type: "string" } } },
+        A: { $ref: "#/$defs/B" },
+        B: { $ref: "#/$defs/A" },
+      },
+    }),
+    ["location  object", "  Where to look", "  name  string", "loop  A"].join(
+      "\n",
+    ),
+  );
+});
+
+test("references that name nothing say so instead of showing any", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        missing: { $ref: "#/$defs/Missing" },
+        remote: {
+          type: "array",
+          items: { $ref: "https://example.com/tag.json" },
+        },
+        typed: { $ref: "#/$defs/Missing", type: "string" },
+      },
+    }),
+    [
+      "missing  unresolved reference Missing",
+      "remote  array of items of unresolved reference tag.json",
+      "typed  string",
     ].join("\n"),
   );
 });
@@ -195,7 +291,7 @@ test("malformed or odd schema parts render instead of throwing", () => {
       },
     }),
     [
-      "broken  any",
+      "broken  unresolved reference %E0%A4%A",
       "nothing  never",
       "untyped  any",
       'code  string, pattern "^\\d+\\nb$"',
@@ -295,6 +391,22 @@ test("references that fan out list each level once instead of every path", () =>
   assert.ok(lines.length < 200, `${lines.length} lines`);
   assert.match(text, /^ {4}f1 {2}object\n {6}Same fields as query\.f0\.f0\.$/m);
   assert.doesNotMatch(text, /Schema too large/);
+});
+
+test("zod-style references that fan out stay bounded once they resolve", () => {
+  const definitions: unknown = JSON.parse(
+    JSON.stringify(fannedOutDefinitions(8, 10)).replaceAll(
+      "#/definitions/",
+      "#/$defs/",
+    ),
+  );
+  const lines = schemaLines({
+    type: "object",
+    properties: { query: { $ref: "#/$defs/D0" } },
+    definitions,
+  });
+  assert.ok(lines.length < 200, `${lines.length} lines`);
+  assert.match(linesText(lines), /Same fields as query\.f0\./);
 });
 
 test("unions whose references fan out are cut short instead of stalling", () => {
