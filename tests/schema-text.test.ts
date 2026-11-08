@@ -297,6 +297,99 @@ test("references that fan out list each level once instead of every path", () =>
   assert.doesNotMatch(text, /Schema too large/);
 });
 
+test("a shared definition first listed past the depth limit is listed in full where there's room", () => {
+  let nested: Record<string, unknown> = {
+    type: "object",
+    properties: { addr: { $ref: "#/$defs/Address" } },
+  };
+  for (const name of ["g", "f", "e", "d", "c", "b"]) {
+    nested = { type: "object", properties: { [name]: nested } };
+  }
+  const text = render({
+    type: "object",
+    properties: { a: nested, billing: { $ref: "#/$defs/Address" } },
+    $defs: {
+      Address: {
+        type: "object",
+        properties: {
+          street: { type: "string" },
+          geo: { type: "object", properties: { lat: { type: "number" } } },
+        },
+      },
+    },
+  });
+  assert.match(
+    text,
+    /^billing {2}object\n {2}street {2}string\n {2}geo {2}object\n {4}lat {2}number$/m,
+  );
+});
+
+test("long enums, tuples, unions and text are shortened to fit a line", () => {
+  const values = Array.from({ length: 2000 }, (_, index) => `value-${index}`);
+  const properties = Object.fromEntries(
+    Array.from({ length: 400 }, (_, index) => [
+      `p${index}`,
+      { $ref: "#/definitions/Values" },
+    ]),
+  );
+  const schema = {
+    type: "object",
+    properties: {
+      tuple: {
+        type: "array",
+        items: Array.from({ length: 1000 }, () => ({ type: "string" })),
+      },
+      union: {
+        anyOf: Array.from({ length: 30 }, (_, index) => ({ const: index })),
+      },
+      described: { type: "string", description: "x".repeat(100_000) },
+      ...properties,
+    },
+    definitions: { Values: { enum: values } },
+  };
+  const started = performance.now();
+  const lines = linesText(schemaLines(schema)).split("\n");
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal(
+    lines[0],
+    "tuple  tuple of string, string, string, string, string, string, string, string, string, string, … 990 more",
+  );
+  assert.equal(
+    lines[1],
+    "union  0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | … 20 more",
+  );
+  assert.match(lines.at(-2) ?? "", /^p\d+ {2}"value-0" \| .* \| … \d+ more$/);
+  assert.ok(lines.every((line) => line.length <= 400));
+});
+
+test("long chains of array items and allOf members are followed only so far", () => {
+  const length = 5_000;
+  const chain = (link: (next: string) => Record<string, unknown>) => ({
+    type: "object",
+    properties: { x: { $ref: "#/definitions/D0" } },
+    definitions: Object.fromEntries([
+      ...Array.from({ length }, (_, index) => [
+        `D${index}`,
+        link(`#/definitions/D${index + 1}`),
+      ]),
+      [
+        `D${length}`,
+        { type: "object", properties: { leaf: { type: "string" } } },
+      ],
+    ]),
+  });
+  const started = performance.now();
+  const items = render(
+    chain((next) => ({ type: "array", items: { $ref: next } })),
+  );
+  const allOf = render(
+    chain((next) => ({ allOf: [{ $ref: next }], properties: {} })),
+  );
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(items, /^x {2}array of items of array of .*…$/);
+  assert.match(allOf, /^x {2}object$/m);
+});
+
 test("unions whose references fan out are cut short instead of stalling", () => {
   const levels = 9;
   const definitions = Object.fromEntries(

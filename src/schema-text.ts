@@ -13,28 +13,76 @@ type JsonObject = Record<string, unknown>;
 const indentWidth = 2;
 const maximumDepth = 8;
 const maximumLines = 400;
+const maximumLineLength = 400;
+const maximumCharacters = 100_000;
+const maximumTypeLength = 200;
+const maximumDescriptionLength = 4_000;
+/** Enum values, tuple elements and union options named in a type before the rest are counted. */
+const maximumNamedValues = 10;
+/** How deep array items, unions and `allOf` members are followed when looking for fields. */
+const maximumNesting = 64;
 /**
  * Caps the reference lookups behind one schema, so schemas whose references fan out are cut
  * short instead of stalling the TUI.
  */
 const maximumReferenceLookups = 50_000;
 
-/** Thrown when a schema would take more lines or lookups than a detail view shows. */
+/** Thrown when a schema would take more lines, text or lookups than a detail view shows. */
 class SchemaTooLarge extends Error {}
 
 interface Rendering {
   root: JsonObject;
   lines: TextLine[];
   remainingLookups: number;
-  /** Where each shared definition's fields were first listed, by its reference. */
-  listedDefinitions: Map<string, string>;
+  remainingCharacters: number;
+  /** Where each shared definition's fields were listed, by its reference. */
+  listedDefinitions: Map<string, DefinitionListing>;
+  /** How often the depth limit has cut a listing or type short. */
+  depthCutoffs: number;
+}
+
+interface DefinitionListing {
+  path: string;
+  depth: number;
+  /** Whether the depth limit cut this listing short, so a shallower use must list it again. */
+  cut: boolean;
+}
+
+function shortened(text: string, maximumLength: number): string {
+  return text.length > maximumLength
+    ? `${text.slice(0, maximumLength - 1)}…`
+    : text;
+}
+
+/** Keeps a line within the line length, ending a cut line with "…". */
+function fittedLine(line: TextLine): TextLine {
+  let remaining = maximumLineLength;
+  const fitted: TextLine = [];
+  for (const segment of line) {
+    if (segment.text.length < remaining) {
+      fitted.push(segment);
+      remaining -= segment.text.length;
+      continue;
+    }
+    fitted.push({ ...segment, text: shortened(segment.text, remaining) });
+    break;
+  }
+  return fitted;
 }
 
 function write(rendering: Rendering, line: TextLine): void {
   if (rendering.lines.length >= maximumLines) {
     throw new SchemaTooLarge();
   }
-  rendering.lines.push(line);
+  const fitted = fittedLine(line);
+  rendering.remainingCharacters -= fitted.reduce(
+    (length, segment) => length + segment.text.length,
+    0,
+  );
+  if (rendering.remainingCharacters < 0) {
+    throw new SchemaTooLarge();
+  }
+  rendering.lines.push(fitted);
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -43,7 +91,33 @@ function isObject(value: unknown): value is JsonObject {
 
 function literal(value: unknown): string {
   const json = JSON.stringify(value) as string | undefined;
-  return json ?? String(value);
+  return shortened(json ?? String(value), maximumTypeLength);
+}
+
+/** Names the first few values, leaving out repeated names, then counts the rest. */
+function namedValues(
+  values: readonly unknown[],
+  name: (value: unknown) => string,
+  separator: string,
+  { distinct = false } = {},
+): string {
+  const names: string[] = [];
+  let length = 0;
+  let named = 0;
+  while (
+    named < values.length &&
+    names.length < maximumNamedValues &&
+    length < maximumTypeLength / 2
+  ) {
+    const valueName = name(values[named]);
+    named++;
+    if (!distinct || !names.includes(valueName)) {
+      names.push(valueName);
+      length += valueName.length + separator.length;
+    }
+  }
+  const rest = values.length - named;
+  return [...names, ...(rest > 0 ? [`… ${rest} more`] : [])].join(separator);
 }
 
 function plain(text: string): TextSegment {
@@ -66,7 +140,8 @@ function writeDescription(
   if (typeof description !== "string" || description.trim() === "") {
     return;
   }
-  for (const line of description.trim().split(/\r?\n/)) {
+  const text = shortened(description.trim(), maximumDescriptionLength);
+  for (const line of text.split(/\r?\n/)) {
     write(rendering, [plain(`${indentText(depth)}${line}`)]);
   }
 }
@@ -168,10 +243,15 @@ function mergedAllOf(
   node: JsonObject,
   rendering: Rendering,
   visiting: ReadonlySet<string>,
+  nesting = 0,
 ): JsonObject {
   const members = nonEmptyList(node.allOf);
   if (members === undefined) {
     return node;
+  }
+  if (nesting > maximumNesting) {
+    const { allOf: _allOf, ...rest } = node;
+    return rest;
   }
   const properties: JsonObject = {};
   const required = new Set<unknown>();
@@ -184,7 +264,12 @@ function mergedAllOf(
       const resolved = resolveReference(member, rendering, visiting);
       memberNode =
         resolved.recursiveReference === undefined
-          ? mergedAllOf(resolved.node, rendering, resolved.visiting)
+          ? mergedAllOf(
+              resolved.node,
+              rendering,
+              resolved.visiting,
+              nesting + 1,
+            )
           : {};
     }
     if (isObject(memberNode.properties)) {
@@ -207,6 +292,9 @@ function pluralType(type: string): string {
   if (type === "any") {
     return "values";
   }
+  if (type === "…") {
+    return type;
+  }
   if (type.startsWith('"') || type.includes(" ")) {
     return `items of ${type}`;
   }
@@ -214,6 +302,18 @@ function pluralType(type: string): string {
 }
 
 function typeName(
+  schema: unknown,
+  rendering: Rendering,
+  visiting: ReadonlySet<string>,
+  depth: number,
+): string {
+  return shortened(
+    unboundedTypeName(schema, rendering, visiting, depth),
+    maximumTypeLength,
+  );
+}
+
+function unboundedTypeName(
   schema: unknown,
   rendering: Rendering,
   visiting: ReadonlySet<string>,
@@ -232,6 +332,7 @@ function typeName(
     return "unknown";
   }
   if (depth > maximumDepth) {
+    rendering.depthCutoffs++;
     return "…";
   }
   const resolved = resolveReference(schema, rendering, visiting);
@@ -247,7 +348,7 @@ function typeName(
     }
     if (Array.isArray(node.items)) {
       const items: unknown[] = node.items;
-      return `tuple of ${items.map(nestedName).join(", ")}`;
+      return `tuple of ${namedValues(items, nestedName, ", ")}`;
     }
     return `array of ${pluralType(nestedName(node.items))}`;
   };
@@ -255,11 +356,12 @@ function typeName(
     return literal(node.const);
   }
   if (Array.isArray(node.enum) && node.enum.length > 0) {
-    return node.enum.map(literal).join(" | ");
+    const values: unknown[] = node.enum;
+    return namedValues(values, literal, " | ");
   }
   const alternatives = variants(node);
   if (alternatives !== undefined) {
-    return [...new Set(alternatives.map(nestedName))].join(" | ");
+    return namedValues(alternatives, nestedName, " | ", { distinct: true });
   }
   const type = node.type;
   if (Array.isArray(type)) {
@@ -336,7 +438,11 @@ function nestedObject(
   node: JsonObject,
   rendering: Rendering,
   visiting: ReadonlySet<string>,
+  nesting = 0,
 ): FieldSource | undefined {
+  if (nesting > maximumNesting) {
+    return undefined;
+  }
   const resolved = resolveReference(node, rendering, visiting);
   if (resolved.recursiveReference !== undefined) {
     return undefined;
@@ -356,13 +462,15 @@ function nestedObject(
   }
   const items = merged.items;
   if (isObject(items)) {
-    return nestedObject(items, rendering, resolved.visiting);
+    return nestedObject(items, rendering, resolved.visiting, nesting + 1);
   }
   const alternatives = variants(merged);
   if (alternatives !== undefined) {
     const objects = alternatives
       .filter(isObject)
-      .map((variant) => nestedObject(variant, rendering, resolved.visiting))
+      .map((variant) =>
+        nestedObject(variant, rendering, resolved.visiting, nesting + 1),
+      )
       .filter((variant) => variant !== undefined);
     return objects.length === 1 ? objects[0] : undefined;
   }
@@ -400,7 +508,11 @@ function objectUnion(
   node: JsonObject,
   rendering: Rendering,
   visiting: ReadonlySet<string>,
+  nesting = 0,
 ): FieldSource | undefined {
+  if (nesting > maximumNesting) {
+    return undefined;
+  }
   const resolved = resolveReference(node, rendering, visiting);
   if (resolved.recursiveReference !== undefined) {
     return undefined;
@@ -418,10 +530,10 @@ function objectUnion(
     (variant) => !(isObject(variant) && variant.type === "null"),
   );
   if (present.length === 1 && isObject(present[0])) {
-    return objectUnion(present[0], rendering, resolved.visiting);
+    return objectUnion(present[0], rendering, resolved.visiting, nesting + 1);
   }
   return isObject(merged.items)
-    ? objectUnion(merged.items, rendering, resolved.visiting)
+    ? objectUnion(merged.items, rendering, resolved.visiting, nesting + 1)
     : undefined;
 }
 
@@ -437,6 +549,7 @@ function writeProperties(
   path: string,
 ): void {
   if (depth > maximumDepth) {
+    rendering.depthCutoffs++;
     write(rendering, [plain(`${indentText(depth)}…`)]);
     return;
   }
@@ -445,18 +558,19 @@ function writeProperties(
    * listed, where its fields are.
    */
   const writeFields = (source: FieldSource, sourcePath: string) => {
-    const listedAt =
+    const listing =
       source.definition === undefined
         ? undefined
         : rendering.listedDefinitions.get(source.definition);
-    if (listedAt !== undefined) {
+    if (listing !== undefined && (!listing.cut || depth + 1 >= listing.depth)) {
       write(rendering, [
         plain(indentText(depth + 1)),
-        muted(`Same fields as ${listedAt}.`),
+        muted(`Same fields as ${listing.path}.`),
       ]);
       return;
     }
     const linesBefore = rendering.lines.length;
+    const cutoffsBefore = rendering.depthCutoffs;
     writeProperties(
       rendering,
       source.node,
@@ -466,10 +580,13 @@ function writeProperties(
     );
     if (
       source.definition !== undefined &&
-      depth < maximumDepth &&
       rendering.lines.length > linesBefore
     ) {
-      rendering.listedDefinitions.set(source.definition, sourcePath);
+      rendering.listedDefinitions.set(source.definition, {
+        path: sourcePath,
+        depth: depth + 1,
+        cut: rendering.depthCutoffs > cutoffsBefore,
+      });
     }
   };
   const alternatives = variants(objectSchema);
@@ -606,7 +723,9 @@ export function schemaLines(schema: unknown): TextLine[] {
     root: schema,
     lines: [],
     remainingLookups: maximumReferenceLookups,
+    remainingCharacters: maximumCharacters,
     listedDefinitions: new Map(),
+    depthCutoffs: 0,
   };
   try {
     return rootLines(rendering, schema);
