@@ -199,6 +199,8 @@ interface Resolved {
   recursiveReference?: string;
   /** The reference that names nothing in the schema, if this node has one. */
   unresolvedReference?: string;
+  /** Whether resolving stopped because definitions referred onward too many times. */
+  chainTooLong?: boolean;
 }
 
 /** The value a local JSON pointer such as `#/$defs/Address` names, if any. */
@@ -275,10 +277,12 @@ function resolveReference(
     typeof reference === "string";
     reference = current.$ref
   ) {
-    const target =
-      reference.startsWith("#") && hops < maximumReferenceHops
-        ? referenceTarget(rendering.root, reference)
-        : undefined;
+    if (hops === maximumReferenceHops) {
+      return { node: current, visiting: chain, chainTooLong: true };
+    }
+    const target = reference.startsWith("#")
+      ? referenceTarget(rendering.root, reference)
+      : undefined;
     if (target === undefined) {
       return { node: current, visiting: chain, unresolvedReference: reference };
     }
@@ -453,7 +457,10 @@ function typeName(
   if (resolved.recursiveReference !== undefined) {
     return recursiveTypeName(resolved.recursiveReference, rendering);
   }
-  if (resolved.unresolvedReference !== undefined) {
+  if (
+    resolved.unresolvedReference !== undefined ||
+    resolved.chainTooLong === true
+  ) {
     const known = typeName(
       withoutReference(resolved.node),
       rendering,
@@ -461,7 +468,9 @@ function typeName(
       depth,
     );
     return known === "any"
-      ? `unresolved reference ${referenceName(resolved.unresolvedReference)}`
+      ? resolved.unresolvedReference === undefined
+        ? "reference chain too long"
+        : `unresolved reference ${referenceName(resolved.unresolvedReference)}`
       : known;
   }
   const node = mergedAllOf(resolved.node, rendering, resolved.visiting);

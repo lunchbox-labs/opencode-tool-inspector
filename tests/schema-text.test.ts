@@ -239,7 +239,7 @@ test("recursive zod schemas with generated names say what they are, not always o
   );
 });
 
-test("long chains of definitions that only refer to another end as unresolved", () => {
+test("long chains of definitions that only refer to another say the chain is too long", () => {
   const length = 20_000;
   const definitions: Record<string, unknown> = {
     [`D${length}`]: { type: "string" },
@@ -254,7 +254,7 @@ test("long chains of definitions that only refer to another end as unresolved", 
     definitions,
   });
   assert.ok(performance.now() - started < 2_000);
-  assert.equal(text, "x  unresolved reference D64");
+  assert.equal(text, "x  reference chain too long");
 });
 
 test("a definition reached as both $defs and definitions is listed once", () => {
