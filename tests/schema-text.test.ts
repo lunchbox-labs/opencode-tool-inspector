@@ -203,7 +203,7 @@ test("malformed or odd schema parts render instead of throwing", () => {
   );
 });
 
-test("very long schemas are cut short with a count", () => {
+test("very long schemas are cut short with a note", () => {
   const properties = Object.fromEntries(
     Array.from({ length: 450 }, (_, index) => [
       `field${index}`,
@@ -212,7 +212,118 @@ test("very long schemas are cut short with a count", () => {
   );
   const lines = schemaLines({ type: "object", properties });
   assert.equal(lines.length, 401);
-  assert.equal(linesText(lines.slice(-1)), "… 50 more lines not shown.");
+  assert.equal(
+    linesText(lines.slice(-1)),
+    "… Schema too large to show in full.",
+  );
+});
+
+test("a shared definition's fields are listed once, and later uses say where", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        home: { $ref: "#/$defs/Address" },
+        work: { $ref: "#/$defs/Address", description: "Office address" },
+        stops: {
+          type: "array",
+          items: {
+            oneOf: [
+              { $ref: "#/$defs/Address" },
+              { type: "object", properties: { lat: { type: "number" } } },
+            ],
+          },
+        },
+        billing: {
+          $ref: "#/$defs/Address",
+          properties: { vat: { type: "string" } },
+        },
+      },
+      $defs: {
+        Address: {
+          type: "object",
+          properties: { street: { type: "string" }, city: { type: "string" } },
+          required: ["street"],
+        },
+      },
+    }),
+    [
+      "home  object",
+      "  street  string, required",
+      "  city  string",
+      "work  object",
+      "  Office address",
+      "  Same fields as home.",
+      "stops  array of objects",
+      "  Option 1",
+      "    Same fields as home.",
+      "  Option 2",
+      "    lat  number",
+      "billing  object",
+      "  vat  string",
+    ].join("\n"),
+  );
+});
+
+/** Definitions D0 to D(levels - 1), each with `breadth` fields that all refer to the next. */
+function fannedOutDefinitions(breadth: number, levels: number) {
+  return Object.fromEntries(
+    Array.from({ length: levels }, (_, level) => [
+      `D${level}`,
+      {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: breadth }, (_, field) => [
+            `f${field}`,
+            level === levels - 1
+              ? { type: "string" }
+              : { $ref: `#/definitions/D${level + 1}` },
+          ]),
+        ),
+      },
+    ]),
+  );
+}
+
+test("references that fan out list each level once instead of every path", () => {
+  const lines = schemaLines({
+    type: "object",
+    properties: { query: { $ref: "#/definitions/D0" } },
+    definitions: fannedOutDefinitions(8, 10),
+  });
+  const text = linesText(lines);
+  assert.ok(lines.length < 200, `${lines.length} lines`);
+  assert.match(text, /^ {4}f1 {2}object\n {6}Same fields as query\.f0\.f0\.$/m);
+  assert.doesNotMatch(text, /Schema too large/);
+});
+
+test("unions whose references fan out are cut short instead of stalling", () => {
+  const levels = 9;
+  const definitions = Object.fromEntries(
+    Array.from({ length: levels }, (_, level) => [
+      `U${level}`,
+      level === levels - 1
+        ? { type: "object", properties: { leaf: { type: "string" } } }
+        : {
+            anyOf: Array.from({ length: 6 }, () => ({
+              $ref: `#/definitions/U${level + 1}`,
+            })),
+          },
+    ]),
+  );
+  const schema = {
+    type: "object",
+    properties: { value: { $ref: "#/definitions/U0" } },
+    definitions,
+  };
+  const started = performance.now();
+  const lines = schemaLines(schema);
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal(
+    linesText(lines.slice(0, 1)),
+    "OpenCode reported this input schema:",
+  );
+  assert.ok(lines.length <= 401);
 });
 
 test("self-referencing allOf members render instead of overflowing the stack", () => {

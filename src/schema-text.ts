@@ -13,6 +13,29 @@ type JsonObject = Record<string, unknown>;
 const indentWidth = 2;
 const maximumDepth = 8;
 const maximumLines = 400;
+/**
+ * Caps the reference lookups behind one schema, so schemas whose references fan out are cut
+ * short instead of stalling the TUI.
+ */
+const maximumReferenceLookups = 50_000;
+
+/** Thrown when a schema would take more lines or lookups than a detail view shows. */
+class SchemaTooLarge extends Error {}
+
+interface Rendering {
+  root: JsonObject;
+  lines: TextLine[];
+  remainingLookups: number;
+  /** Where each shared definition's fields were first listed, by its reference. */
+  listedDefinitions: Map<string, string>;
+}
+
+function write(rendering: Rendering, line: TextLine): void {
+  if (rendering.lines.length >= maximumLines) {
+    throw new SchemaTooLarge();
+  }
+  rendering.lines.push(line);
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -27,18 +50,25 @@ function plain(text: string): TextSegment {
   return { text, tone: "plain" };
 }
 
+function muted(text: string): TextSegment {
+  return { text, tone: "muted" };
+}
+
 function indentText(depth: number): string {
   return " ".repeat(depth * indentWidth);
 }
 
-function descriptionLines(description: unknown, depth: number): TextLine[] {
+function writeDescription(
+  rendering: Rendering,
+  description: unknown,
+  depth: number,
+): void {
   if (typeof description !== "string" || description.trim() === "") {
-    return [];
+    return;
   }
-  return description
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => [plain(`${indentText(depth)}${line}`)]);
+  for (const line of description.trim().split(/\r?\n/)) {
+    write(rendering, [plain(`${indentText(depth)}${line}`)]);
+  }
 }
 
 function withoutReference(node: JsonObject): JsonObject {
@@ -54,33 +84,62 @@ function decodedPointerKey(rawKey: string): string {
   }
 }
 
+/** Keys beside a `$ref` that change its target's shape, so it no longer reads as that definition. */
+const shapeKeys = new Set([
+  "properties",
+  "required",
+  "items",
+  "prefixItems",
+  "additionalProperties",
+  "allOf",
+  "anyOf",
+  "oneOf",
+]);
+
+interface Resolved {
+  node: JsonObject;
+  visiting: ReadonlySet<string>;
+  /** The shared definition this node is, unchanged, when it came from a reference. */
+  definition?: string;
+  /** The reference that points back into a definition being expanded, if this node is one. */
+  recursiveReference?: string;
+}
+
 /** Resolves local `$ref`s, as zod and MCP servers emit for shared definitions. */
 function resolveReference(
   node: JsonObject,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
-): { node: JsonObject; reference?: string; recursive: boolean } {
+): Resolved {
+  rendering.remainingLookups--;
+  if (rendering.remainingLookups < 0) {
+    throw new SchemaTooLarge();
+  }
   const reference = node.$ref;
   if (typeof reference !== "string" || !reference.startsWith("#")) {
-    return { node, recursive: false };
+    return { node, visiting };
   }
   if (visiting.has(reference)) {
-    return { node, reference, recursive: true };
+    return { node, visiting, recursiveReference: reference };
   }
-  let target: unknown = root;
+  let target: unknown = rendering.root;
   for (const rawKey of reference.slice(1).split("/").filter(Boolean)) {
     const key = decodedPointerKey(rawKey)
       .replaceAll("~1", "/")
       .replaceAll("~0", "~");
     target = isObject(target) ? target[key] : undefined;
   }
-  return isObject(target)
-    ? {
-        node: { ...target, ...withoutReference(node) },
-        reference,
-        recursive: false,
-      }
-    : { node, reference, recursive: false };
+  if (!isObject(target)) {
+    return { node, visiting };
+  }
+  const siblings = withoutReference(node);
+  return {
+    node: { ...target, ...siblings },
+    visiting: new Set([...visiting, reference]),
+    ...(Object.keys(siblings).some((key) => shapeKeys.has(key))
+      ? {}
+      : { definition: reference }),
+  };
 }
 
 function referenceName(reference: string): string {
@@ -107,7 +166,7 @@ function hasCombinators(node: JsonObject): boolean {
 /** Folds `allOf` members' properties and required names into one object schema. */
 function mergedAllOf(
   node: JsonObject,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
 ): JsonObject {
   const members = nonEmptyList(node.allOf);
@@ -120,17 +179,14 @@ function mergedAllOf(
     if (!isObject(member)) {
       continue;
     }
-    const resolved = resolveReference(member, root, visiting);
-    const memberVisiting =
-      resolved.reference === undefined
-        ? visiting
-        : new Set([...visiting, resolved.reference]);
-    const memberNode =
-      member === node
-        ? member
-        : resolved.recursive
-          ? {}
-          : mergedAllOf(resolved.node, root, memberVisiting);
+    let memberNode = member;
+    if (member !== node) {
+      const resolved = resolveReference(member, rendering, visiting);
+      memberNode =
+        resolved.recursiveReference === undefined
+          ? mergedAllOf(resolved.node, rendering, resolved.visiting)
+          : {};
+    }
     if (isObject(memberNode.properties)) {
       Object.assign(properties, memberNode.properties);
     }
@@ -159,7 +215,7 @@ function pluralType(type: string): string {
 
 function typeName(
   schema: unknown,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
   depth: number,
 ): string {
@@ -178,17 +234,13 @@ function typeName(
   if (depth > maximumDepth) {
     return "…";
   }
-  const resolved = resolveReference(schema, root, visiting);
-  if (resolved.recursive && resolved.reference !== undefined) {
-    return referenceName(resolved.reference);
+  const resolved = resolveReference(schema, rendering, visiting);
+  if (resolved.recursiveReference !== undefined) {
+    return referenceName(resolved.recursiveReference);
   }
-  const nextVisiting =
-    resolved.reference === undefined
-      ? visiting
-      : new Set([...visiting, resolved.reference]);
-  const node = mergedAllOf(resolved.node, root, nextVisiting);
+  const node = mergedAllOf(resolved.node, rendering, resolved.visiting);
   const nestedName = (nested: unknown) =>
-    typeName(nested, root, nextVisiting, depth + 1);
+    typeName(nested, rendering, resolved.visiting, depth + 1);
   const arrayName = () => {
     if (node.items === undefined) {
       return "array";
@@ -272,99 +324,104 @@ function constraintNotes(node: JsonObject): string[] {
   return notes;
 }
 
+/** An object schema to list fields from, and the shared definition it is, if any. */
+interface FieldSource {
+  node: JsonObject;
+  visiting: ReadonlySet<string>;
+  definition?: string;
+}
+
 /** The object schema whose properties appear nested under a property, if any. */
 function nestedObject(
   node: JsonObject,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
-): { node: JsonObject; visiting: ReadonlySet<string> } | undefined {
-  const resolved = resolveReference(node, root, visiting);
-  if (resolved.recursive) {
+): FieldSource | undefined {
+  const resolved = resolveReference(node, rendering, visiting);
+  if (resolved.recursiveReference !== undefined) {
     return undefined;
   }
-  const nextVisiting =
-    resolved.reference === undefined
-      ? visiting
-      : new Set([...visiting, resolved.reference]);
-  const merged = mergedAllOf(resolved.node, root, nextVisiting);
+  const merged = mergedAllOf(resolved.node, rendering, resolved.visiting);
   // An empty `properties` beside a union, as some schema generators emit, defers to the union.
   if (
     isObject(merged.properties) &&
     (Object.keys(merged.properties).length > 0 ||
       variants(merged) === undefined)
   ) {
-    return { node: merged, visiting: nextVisiting };
+    return {
+      node: merged,
+      visiting: resolved.visiting,
+      definition: resolved.definition,
+    };
   }
   const items = merged.items;
   if (isObject(items)) {
-    return nestedObject(items, root, nextVisiting);
+    return nestedObject(items, rendering, resolved.visiting);
   }
   const alternatives = variants(merged);
   if (alternatives !== undefined) {
     const objects = alternatives
       .filter(isObject)
-      .map((variant) => nestedObject(variant, root, nextVisiting))
+      .map((variant) => nestedObject(variant, rendering, resolved.visiting))
       .filter((variant) => variant !== undefined);
     return objects.length === 1 ? objects[0] : undefined;
   }
   return undefined;
 }
 
-function muted(text: string): TextSegment {
-  return { text, tone: "muted" };
-}
-
 function listedObjectVariants(
   node: JsonObject,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
 ): number {
   return (variants(node) ?? []).filter(
     (variant) =>
-      isObject(variant) && nestedObject(variant, root, visiting) !== undefined,
+      isObject(variant) &&
+      nestedObject(variant, rendering, visiting) !== undefined,
   ).length;
 }
 
 /** Whether listing a union option says more than "object". */
 function informativeVariant(
   variant: unknown,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
 ): boolean {
-  const type = typeName(variant, root, visiting, 0);
+  const type = typeName(variant, rendering, visiting, 0);
   return (
     (type !== "object" && type !== "any") ||
-    (isObject(variant) && nestedObject(variant, root, visiting) !== undefined)
+    (isObject(variant) &&
+      nestedObject(variant, rendering, visiting) !== undefined)
   );
 }
 
 /** The union of several object options under a property, following array items, if any. */
 function objectUnion(
   node: JsonObject,
-  root: JsonObject,
+  rendering: Rendering,
   visiting: ReadonlySet<string>,
-): { node: JsonObject; visiting: ReadonlySet<string> } | undefined {
-  const resolved = resolveReference(node, root, visiting);
-  if (resolved.recursive) {
+): FieldSource | undefined {
+  const resolved = resolveReference(node, rendering, visiting);
+  if (resolved.recursiveReference !== undefined) {
     return undefined;
   }
-  const nextVisiting =
-    resolved.reference === undefined
-      ? visiting
-      : new Set([...visiting, resolved.reference]);
-  const merged = mergedAllOf(resolved.node, root, nextVisiting);
-  if (listedObjectVariants(merged, root, nextVisiting) > 1) {
-    return { node: merged, visiting: nextVisiting };
+  const merged = mergedAllOf(resolved.node, rendering, resolved.visiting);
+  if (listedObjectVariants(merged, rendering, resolved.visiting) > 1) {
+    return {
+      node: merged,
+      visiting: resolved.visiting,
+      definition: resolved.definition,
+    };
   }
   // A nullable union wraps the union beside a null option.
   const present = (variants(merged) ?? []).filter(
     (variant) => !(isObject(variant) && variant.type === "null"),
   );
   if (present.length === 1 && isObject(present[0])) {
-    return objectUnion(present[0], root, nextVisiting);
+    return objectUnion(present[0], rendering, resolved.visiting);
   }
   return isObject(merged.items)
-    ? objectUnion(merged.items, root, nextVisiting)
+    ? objectUnion(merged.items, rendering, resolved.visiting)
     : undefined;
 }
 
@@ -372,101 +429,122 @@ function objectUnion(
  * Lists an object schema's properties, then each option of a union beside them, indented by
  * depth.
  */
-function propertyLines(
+function writeProperties(
+  rendering: Rendering,
   objectSchema: JsonObject,
-  root: JsonObject,
   visiting: ReadonlySet<string>,
   depth: number,
-): TextLine[] {
+  path: string,
+): void {
   if (depth > maximumDepth) {
-    return [[plain(`${indentText(depth)}…`)]];
+    write(rendering, [plain(`${indentText(depth)}…`)]);
+    return;
   }
-  /** Lists each option of a union, or nothing when no option says more than "object". */
-  const optionLines = (schema: JsonObject): TextLine[] => {
-    const alternatives = variants(schema);
-    if (
-      alternatives?.some((variant) =>
-        informativeVariant(variant, root, visiting),
-      ) !== true
-    ) {
-      return [];
+  /**
+   * Lists a field's or option's own fields one level deeper, or, for a shared definition already
+   * listed, where its fields are.
+   */
+  const writeFields = (source: FieldSource, sourcePath: string) => {
+    const listedAt =
+      source.definition === undefined
+        ? undefined
+        : rendering.listedDefinitions.get(source.definition);
+    if (listedAt !== undefined) {
+      write(rendering, [
+        plain(indentText(depth + 1)),
+        muted(`Same fields as ${listedAt}.`),
+      ]);
+      return;
     }
-    return alternatives.flatMap((variant, index) => {
-      const heading: TextLine = [
-        plain(indentText(depth)),
-        { text: `Option ${index + 1}`, tone: "name" },
-      ];
-      const nested = isObject(variant)
-        ? nestedObject(variant, root, visiting)
-        : undefined;
-      const lines =
-        nested === undefined
-          ? []
-          : propertyLines(nested.node, root, nested.visiting, depth + 1);
-      return lines.length > 0
-        ? [heading, ...lines]
-        : [
-            [
-              ...heading,
-              muted(`  ${typeName(variant, root, visiting, depth)}`),
-            ],
-          ];
-    });
+    const linesBefore = rendering.lines.length;
+    writeProperties(
+      rendering,
+      source.node,
+      source.visiting,
+      depth + 1,
+      sourcePath,
+    );
+    if (
+      source.definition !== undefined &&
+      depth < maximumDepth &&
+      rendering.lines.length > linesBefore
+    ) {
+      rendering.listedDefinitions.set(source.definition, sourcePath);
+    }
   };
+  const alternatives = variants(objectSchema);
+  // Options are listed only when at least one says more than "object".
+  const listedOptions =
+    alternatives?.some((variant) =>
+      informativeVariant(variant, rendering, visiting),
+    ) === true
+      ? alternatives
+      : [];
   const properties = isObject(objectSchema.properties)
     ? Object.entries(objectSchema.properties)
     : [];
-  const options = optionLines(objectSchema);
-  if (properties.length === 0) {
-    return options;
+  if (properties.length > 0) {
+    const required = new Set(
+      Array.isArray(objectSchema.required)
+        ? objectSchema.required.filter(
+            (name): name is string => typeof name === "string",
+          )
+        : [],
+    );
+    for (const [name, property] of properties) {
+      const resolved = isObject(property)
+        ? mergedAllOf(
+            resolveReference(property, rendering, visiting).node,
+            rendering,
+            visiting,
+          )
+        : {};
+      const details = [
+        typeName(property, rendering, visiting, depth),
+        ...(required.has(name) ? ["required"] : []),
+        ...constraintNotes(resolved),
+      ];
+      write(rendering, [
+        plain(indentText(depth)),
+        { text: name, tone: "name" },
+        muted(`  ${details.join(", ")}`),
+      ]);
+      writeDescription(rendering, resolved.description, depth + 1);
+      const fields = isObject(property)
+        ? (nestedObject(property, rendering, visiting) ??
+          objectUnion(property, rendering, visiting))
+        : undefined;
+      if (fields !== undefined) {
+        writeFields(fields, path === "" ? name : `${path}.${name}`);
+      }
+    }
+    if (listedOptions.length > 0) {
+      write(rendering, [plain(indentText(depth)), muted("And one of:")]);
+    }
   }
-  const required = new Set(
-    Array.isArray(objectSchema.required)
-      ? objectSchema.required.filter(
-          (name): name is string => typeof name === "string",
-        )
-      : [],
-  );
-  const fields = properties.flatMap(([name, property]) => {
-    const resolved = isObject(property)
-      ? mergedAllOf(
-          resolveReference(property, root, visiting).node,
-          root,
-          visiting,
-        )
-      : {};
-    const details = [
-      typeName(property, root, visiting, depth),
-      ...(required.has(name) ? ["required"] : []),
-      ...constraintNotes(resolved),
-    ];
+  listedOptions.forEach((variant, index) => {
     const heading: TextLine = [
       plain(indentText(depth)),
-      { text: name, tone: "name" },
-      { text: `  ${details.join(", ")}`, tone: "muted" },
+      { text: `Option ${index + 1}`, tone: "name" },
     ];
-    const nested = isObject(property)
-      ? nestedObject(property, root, visiting)
+    write(rendering, heading);
+    const linesAfterHeading = rendering.lines.length;
+    const fields = isObject(variant)
+      ? nestedObject(variant, rendering, visiting)
       : undefined;
-    const union =
-      nested === undefined && isObject(property)
-        ? objectUnion(property, root, visiting)
-        : undefined;
-    const childLines =
-      nested !== undefined
-        ? propertyLines(nested.node, root, nested.visiting, depth + 1)
-        : union !== undefined
-          ? propertyLines(union.node, root, union.visiting, depth + 1)
-          : [];
-    return [
-      heading,
-      ...descriptionLines(resolved.description, depth + 1),
-      ...childLines,
-    ];
+    if (fields !== undefined) {
+      writeFields(
+        fields,
+        `${path === "" ? "" : `${path} `}option ${index + 1}`,
+      );
+    }
+    if (rendering.lines.length === linesAfterHeading) {
+      rendering.lines[linesAfterHeading - 1] = [
+        ...heading,
+        muted(`  ${typeName(variant, rendering, visiting, depth)}`),
+      ];
+    }
   });
-  return options.length === 0
-    ? fields
-    : [...fields, [plain(indentText(depth)), muted("And one of:")], ...options];
 }
 
 function rawSchemaLines(schema: JsonObject): TextLine[] {
@@ -488,47 +566,57 @@ function capped(lines: TextLine[]): TextLine[] {
   ];
 }
 
-function rootLines(schema: JsonObject): TextLine[] {
-  const nested = nestedObject(schema, schema, new Set());
+function rootLines(rendering: Rendering, schema: JsonObject): TextLine[] {
+  const noneVisiting = new Set<string>();
+  const nested = nestedObject(schema, rendering, noneVisiting);
   if (nested !== undefined) {
-    const lines = propertyLines(nested.node, schema, nested.visiting, 0);
-    if (lines.length > 0) {
-      return lines;
+    writeProperties(rendering, nested.node, nested.visiting, 0, "");
+    if (rendering.lines.length > 0) {
+      return rendering.lines;
     }
   }
-  const resolved = resolveReference(schema, schema, new Set()).node;
-  const alternatives = variants(mergedAllOf(resolved, schema, new Set()));
-  const informative = alternatives?.some((variant) =>
-    informativeVariant(variant, schema, new Set()),
+  const resolved = resolveReference(schema, rendering, noneVisiting).node;
+  const merged = mergedAllOf(resolved, rendering, noneVisiting);
+  const informative = variants(merged)?.some((variant) =>
+    informativeVariant(variant, rendering, noneVisiting),
   );
-  if (alternatives !== undefined && informative === true) {
-    return [
-      [muted("Takes one of these inputs:")],
-      ...propertyLines(
-        mergedAllOf(resolved, schema, new Set()),
-        schema,
-        new Set(),
-        0,
-      ),
-    ];
+  if (informative === true) {
+    write(rendering, [muted("Takes one of these inputs:")]);
+    writeProperties(rendering, merged, noneVisiting, 0, "");
+    return rendering.lines;
   }
-  const type = typeName(schema, schema, new Set(), 0);
+  const type = typeName(schema, rendering, noneVisiting, 0);
   if (type === "object" || type === "any") {
     return hasCombinators(resolved)
-      ? rawSchemaLines(schema)
+      ? capped(rawSchemaLines(schema))
       : [[muted("Takes no input.")]];
   }
   return [[plain("Input is "), { text: type, tone: "name" }]];
 }
 
-/** Renders a tool's input JSON schema as indented, readable lines. */
+/**
+ * Renders a tool's input JSON schema as indented, readable lines. A shared definition's fields
+ * are listed once, and a schema too large to show is cut short with a note.
+ */
 export function schemaLines(schema: unknown): TextLine[] {
   if (!isObject(schema)) {
     return [[muted("OpenCode did not report an input schema.")]];
   }
+  const rendering: Rendering = {
+    root: schema,
+    lines: [],
+    remainingLookups: maximumReferenceLookups,
+    listedDefinitions: new Map(),
+  };
   try {
-    return capped(rootLines(schema));
-  } catch {
+    return rootLines(rendering, schema);
+  } catch (error) {
+    if (error instanceof SchemaTooLarge && rendering.lines.length > 0) {
+      return [
+        ...rendering.lines,
+        [muted("… Schema too large to show in full.")],
+      ];
+    }
     return capped(rawSchemaLines(schema));
   }
 }
