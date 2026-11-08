@@ -96,6 +96,70 @@ stateDiagram-v2
     Destroyed --> [*]
 ```
 
+## Schema rendering
+
+`schemaLines` in `src/schema-text.ts` renders a tool's input schema each time its detail opens, synchronously, keeping a `Rendering` for that call: the lines written, the remaining character and reference-lookup budgets, how often a depth limit cut a listing short, the `allOf` merges that left members out, where each shared definition's fields were listed, and the first field that refers to each definition.
+
+- A missing or non-object schema says OpenCode reported no input schema.
+- Fields are written one line at a time. A line over 400 characters ends in "…", and enum, union, `type` and tuple element lists name their first few values and count the rest. Tuples read their elements from `prefixItems`, or an `items` list, and any further elements from `items` or `additionalItems`. Listings stop at 8 levels with a "…" line, and array items, unions and `allOf` members are followed at most 64 levels, with "…" where `allOf` members were left out.
+- Writing a 401st line, or going over 100,000 characters or 50,000 reference lookups, throws `SchemaTooLarge`. If lines were written they end with "… Schema too large to show in full."; otherwise the raw schema shows, cut to 400 lines with a count of the rest. Any other error, such as a stack overflow, also shows the raw schema.
+- A root with no fields to list shows its union options, `Input is <type>`, "Takes no input." or, for combinators that can't be listed, the raw schema.
+
+```mermaid
+stateDiagram-v2
+    [*] --> NoSchema: schema missing or not an object
+    [*] --> Listing: detail opened
+    Listing --> Listed: fields written within the limits
+    Listing --> Summary: no fields, root union, type or no input
+    Listing --> CutShort: line, character or lookup limit after lines were written
+    Listing --> RawSchema: limit before any line, unlistable combinators or another error
+    NoSchema --> [*]
+    Listed --> [*]
+    Summary --> [*]
+    CutShort --> [*]
+    RawSchema --> [*]
+```
+
+### References
+
+Each `$ref` resolves to one of four outcomes. A reference that misses under `#/$defs/` or `#/definitions/` is retried under the other, since OpenCode 1.19 renames zod's `$defs` without rewriting references, and references are keyed by the spelling that resolved. A definition that is only a reference to another is followed.
+
+- **Resolved:** the target, with the reference's own keys over it, is rendered and the reference joins the set being expanded.
+- **Recursive:** the target is already being expanded. Its type is the definition's name, or for a generated name such as zod's `__schema0`, its own type, else "same type as <field>" for the first field that refers to it, else "recursive value". A field that refers back says "Same fields as <path>." where that definition is being listed.
+- **Unresolved:** the reference isn't local or names nothing under either spelling. A node with no other type shows "unresolved reference <name>".
+- **Chain too long:** more than 64 references in a row. A node with no other type shows "reference chain too long".
+
+```mermaid
+stateDiagram-v2
+    [*] --> Following: node has a $ref
+    Following --> Following: target is only a reference to another
+    Following --> Resolved: target found, not being expanded
+    Following --> Recursive: target already being expanded
+    Following --> Unresolved: not local, or missing under $defs and definitions
+    Following --> ChainTooLong: 64 references in a row
+    Resolved --> [*]
+    Recursive --> [*]
+    Unresolved --> [*]
+    ChainTooLong --> [*]
+```
+
+### Shared definitions
+
+Within one rendering, each shared definition is listed once. A use that lists fields records its path and depth before writing them, so references back into it from inside can name it, then records whether a depth limit cut it; if it wrote nothing, the earlier record is restored. A later use says "Same fields as <path>." unless the recorded listing was cut and the use is shallower, in which case it lists the fields again and replaces the record. A use with its own shape beside the `$ref`, such as extra properties, always lists in full.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unlisted
+    Unlisted --> Listing: first use with fields
+    Listing --> Unlisted: listing wrote nothing
+    Listing --> Complete: listed within the depth limits
+    Listing --> Cut: listing cut by a depth limit
+    Listing --> Listing: reference back from inside, "Same fields as" its path
+    Complete --> Complete: later use refers to it
+    Cut --> Cut: use at the same depth or deeper refers to it
+    Cut --> Listing: shallower use lists it again
+```
+
 ## Registration and minor state
 
 - The plugin registers its keymap layer and a `server.instance.disposed` subscription, and removes both on `api.lifecycle.onDispose`. Dispose aborts a pending read, which closes the loading alert. It does not close a list or detail: the detail view destroys itself on abort, and a list left open answers Enter with the toast to run `/tools` again.
