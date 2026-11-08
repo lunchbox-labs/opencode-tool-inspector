@@ -186,6 +186,98 @@ test("a definition that only refers to another is followed, and a loop of them e
   );
 });
 
+test("recursive zod schemas with generated names say what they are, not always object", () => {
+  const recursive = (field: string, definition: unknown) => ({
+    type: "object",
+    properties: { [field]: { $ref: "#/$defs/__schema0" } },
+    required: [field],
+    definitions: { __schema0: definition },
+  });
+  const self = { $ref: "#/$defs/__schema0" };
+  assert.equal(
+    render(
+      recursive("value", {
+        anyOf: [
+          { type: "string" },
+          { type: "number" },
+          { type: "null" },
+          { type: "array", items: self },
+          {
+            type: "object",
+            propertyNames: { type: "string" },
+            additionalProperties: self,
+          },
+        ],
+      }),
+    ),
+    "value  string | number | null | array of items of same type as value | object with same type as value values, required",
+  );
+  assert.equal(
+    render(recursive("list", { type: "array", items: self })),
+    "list  array of arrays, required",
+  );
+  assert.equal(
+    render(
+      recursive("expr", {
+        anyOf: [
+          {
+            type: "object",
+            properties: { args: { type: "array", items: self } },
+          },
+          { type: "object", properties: { value: { type: "number" } } },
+        ],
+      }),
+    ),
+    [
+      "expr  object, required",
+      "  Option 1",
+      "    args  array of objects",
+      "      Same fields as expr.",
+      "  Option 2",
+      "    value  number",
+    ].join("\n"),
+  );
+});
+
+test("long chains of definitions that only refer to another end as unresolved", () => {
+  const length = 20_000;
+  const definitions: Record<string, unknown> = {
+    [`D${length}`]: { type: "string" },
+  };
+  for (let index = 0; index < length; index++) {
+    definitions[`D${index}`] = { $ref: `#/definitions/D${index + 1}` };
+  }
+  const started = performance.now();
+  const text = render({
+    type: "object",
+    properties: { x: { $ref: "#/definitions/D0" } },
+    definitions,
+  });
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal(text, "x  unresolved reference D64");
+});
+
+test("a definition reached as both $defs and definitions is listed once", () => {
+  assert.equal(
+    render({
+      type: "object",
+      properties: {
+        home: { $ref: "#/$defs/Address" },
+        work: { $ref: "#/definitions/Address" },
+      },
+      definitions: {
+        Address: { type: "object", properties: { city: { type: "string" } } },
+      },
+    }),
+    [
+      "home  object",
+      "  city  string",
+      "work  object",
+      "  Same fields as home.",
+    ].join("\n"),
+  );
+});
+
 test("references that name nothing say so instead of showing any", () => {
   assert.equal(
     render({
