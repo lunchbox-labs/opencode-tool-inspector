@@ -41,6 +41,8 @@ interface Rendering {
   depthCutoffs: number;
   /** The first field that refers to each definition, by its reference. */
   typedFields: Map<string, string>;
+  /** Merged `allOf` schemas that left out members nested too deeply to follow. */
+  cutMerges: WeakSet<JsonObject>;
 }
 
 interface DefinitionListing {
@@ -91,9 +93,24 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const literalTexts = new WeakMap<object, string>();
+
+/** A value as JSON, shortened; large strings are cut before encoding and objects encoded once. */
 function literal(value: unknown): string {
-  const json = JSON.stringify(value) as string | undefined;
-  return shortened(json ?? String(value), maximumTypeLength);
+  if (typeof value === "string") {
+    const encoded = JSON.stringify(value.slice(0, maximumTypeLength));
+    return value.length > maximumTypeLength ? `${encoded}…` : encoded;
+  }
+  if (typeof value !== "object" || value === null) {
+    const json = JSON.stringify(value) as string | undefined;
+    return shortened(json ?? String(value), maximumTypeLength);
+  }
+  let text = literalTexts.get(value);
+  if (text === undefined) {
+    text = shortened(JSON.stringify(value), maximumTypeLength);
+    literalTexts.set(value, text);
+  }
+  return text;
 }
 
 /** Names the first few values, leaving out repeated names, then counts the rest. */
@@ -182,6 +199,8 @@ interface Resolved {
   recursiveReference?: string;
   /** The reference that names nothing in the schema, if this node has one. */
   unresolvedReference?: string;
+  /** Whether resolving stopped because definitions referred onward too many times. */
+  chainTooLong?: boolean;
 }
 
 /** The value a local JSON pointer such as `#/$defs/Address` names, if any. */
@@ -258,10 +277,12 @@ function resolveReference(
     typeof reference === "string";
     reference = current.$ref
   ) {
-    const target =
-      reference.startsWith("#") && hops < maximumReferenceHops
-        ? referenceTarget(rendering.root, reference)
-        : undefined;
+    if (hops === maximumReferenceHops) {
+      return { node: current, visiting: chain, chainTooLong: true };
+    }
+    const target = reference.startsWith("#")
+      ? referenceTarget(rendering.root, reference)
+      : undefined;
     if (target === undefined) {
       return { node: current, visiting: chain, unresolvedReference: reference };
     }
@@ -316,9 +337,12 @@ function mergedAllOf(
     return node;
   }
   if (nesting > maximumNesting) {
+    rendering.depthCutoffs++;
     const { allOf: _allOf, ...rest } = node;
+    rendering.cutMerges.add(rest);
     return rest;
   }
+  let cut = false;
   const properties: JsonObject = {};
   const required = new Set<unknown>();
   for (const member of [...members, node]) {
@@ -337,6 +361,7 @@ function mergedAllOf(
               nesting + 1,
             )
           : {};
+      cut ||= rendering.cutMerges.has(memberNode);
     }
     if (isObject(memberNode.properties)) {
       Object.assign(properties, memberNode.properties);
@@ -349,9 +374,14 @@ function mergedAllOf(
     }
   }
   const { allOf: _allOf, ...rest } = node;
-  return Object.keys(properties).length === 0
-    ? rest
-    : { ...rest, properties, required: [...required] };
+  const merged =
+    Object.keys(properties).length === 0
+      ? rest
+      : { ...rest, properties, required: [...required] };
+  if (cut) {
+    rendering.cutMerges.add(merged);
+  }
+  return merged;
 }
 
 /** The one JSON type a schema or all of its union's options have, if any. */
@@ -427,7 +457,10 @@ function typeName(
   if (resolved.recursiveReference !== undefined) {
     return recursiveTypeName(resolved.recursiveReference, rendering);
   }
-  if (resolved.unresolvedReference !== undefined) {
+  if (
+    resolved.unresolvedReference !== undefined ||
+    resolved.chainTooLong === true
+  ) {
     const known = typeName(
       withoutReference(resolved.node),
       rendering,
@@ -435,7 +468,9 @@ function typeName(
       depth,
     );
     return known === "any"
-      ? `unresolved reference ${referenceName(resolved.unresolvedReference)}`
+      ? resolved.unresolvedReference === undefined
+        ? "reference chain too long"
+        : `unresolved reference ${referenceName(resolved.unresolvedReference)}`
       : known;
   }
   const node = mergedAllOf(resolved.node, rendering, resolved.visiting);
@@ -474,10 +509,19 @@ function typeName(
   }
   const type = node.type;
   if (Array.isArray(type)) {
-    const names = type
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => (item === "array" ? arrayName() : item));
-    return names.length === 0 ? "any" : names.join(" | ");
+    const typeNames = [
+      ...new Set(
+        type.filter((item): item is string => typeof item === "string"),
+      ),
+    ];
+    let array: string | undefined;
+    return typeNames.length === 0
+      ? "any"
+      : namedValues(
+          typeNames,
+          (item) => (item === "array" ? (array ??= arrayName()) : String(item)),
+          " | ",
+        );
   }
   if (type === "array") {
     return arrayName();
@@ -806,9 +850,12 @@ function writeProperties(
         );
       }
     }
-    if (listedOptions.length > 0) {
-      write(rendering, [plain(indentText(depth)), muted("And one of:")]);
-    }
+  }
+  if (rendering.cutMerges.has(objectSchema)) {
+    write(rendering, [plain(`${indentText(depth)}…`)]);
+  }
+  if (properties.length > 0 && listedOptions.length > 0) {
+    write(rendering, [plain(indentText(depth)), muted("And one of:")]);
   }
   listedOptions.forEach((variant, index) => {
     const heading: TextLine = [
@@ -898,6 +945,7 @@ export function schemaLines(schema: unknown): TextLine[] {
     listedDefinitions: new Map(),
     depthCutoffs: 0,
     typedFields: new Map(),
+    cutMerges: new WeakSet(),
   };
   try {
     return rootLines(rendering, schema);
