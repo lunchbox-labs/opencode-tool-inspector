@@ -14,7 +14,7 @@ Add the package to `plugin` in `tui.jsonc`:
 
 ## Browse tools
 
-Run `/tools`, or **Browse tools** from the command palette, to list the tools OpenCode offers the current model. Type to filter the list, press Enter to see a tool's input schema, the agents that can use it and its full description, and press Escape to return to the list.
+Run `/tools`, or **Browse tools** from the command palette, to list the tools OpenCode offers a model; the dialog's title names which one. Type to filter the list, press Enter to see a tool's input schema, the agents that can use it and its full description, and press Escape to return to the list.
 
 ## Documentation
 
