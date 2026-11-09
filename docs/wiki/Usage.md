@@ -28,4 +28,4 @@ The tool list isn't filtered by agent. Instead, a tool's detail lists each agent
 
 Agents with mode `all` also show their access when they run as a subagent, where that differs, since OpenCode always denies subagents any `experimental.primary_tools`, and denies `todowrite` and `task` unless the agent's own rules name them.
 
-OpenCode's own hidden agents, such as `compaction` and `title`, are left out. If OpenCode's agents can't be read, details open without this section and a toast says why.
+OpenCode's own hidden agents, such as `compaction` and `title`, are left out. If OpenCode's agents can't be read, details open without the agents section and a toast says why.
