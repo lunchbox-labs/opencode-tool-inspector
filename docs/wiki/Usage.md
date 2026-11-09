@@ -22,4 +22,10 @@ The list includes built-in and plugin tools. MCP server tools aren't listed, bec
 
 The input shows each field's type, whether it's required, its allowed values, default and limits, with nested objects shown under their parent and each option of a union listed with its own fields. A definition the schema shares between fields, or one that contains itself, is listed once, and later uses say where its fields are. A reference to a definition the schema doesn't contain shows as unresolved, and one that takes more than 64 references in a row to reach a schema shows as a reference chain too long. Long enums, tuples and unions name their first few values and count the rest, and a schema too large to show in full is cut short with a note.
 
-[Agent access](Agent-access) describes the agents section of a tool's detail.
+## Agent access
+
+The tool list isn't filtered by agent. Instead, a tool's detail lists each agent and whether it's allowed to use the tool, asks first, is denied, or isn't offered the tool at all, following each agent's merged `permission` rules and the rules of the current top-level session. Input patterns with different access, such as `read` asking first for `*.env` files, are listed under the agent.
+
+Agents with mode `all` also show their access when they run as a subagent, where that differs, since OpenCode always denies subagents any `experimental.primary_tools`, and denies `todowrite` and `task` unless the agent's own rules name them.
+
+OpenCode's own hidden agents, such as `compaction` and `title`, are left out. If OpenCode's agents can't be read, details open without this section and a toast says why.

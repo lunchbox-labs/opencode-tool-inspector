@@ -4,9 +4,9 @@ Browse the tools available to OpenCode agents from the TUI: each tool's descript
 
 ## User documentation
 
-- [Usage](Usage): installation, browsing tools and reading a tool's input schema.
-- [Agent access](Agent-access): which agents can use a tool, and why.
+- [Usage](Usage): installation, browsing tools, reading a tool's input schema and which agents can use a tool.
 
 ## Developer documentation
 
-- [Developer](Developer): development, compatibility testing and publishing.
+- [Developer](Developer): development and compatibility testing.
+- [Publishing](Publishing): trusted publisher setup and the release workflow.
