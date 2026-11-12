@@ -3,10 +3,6 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    // Typechecks the host packages against core's source; their builds use core's declarations.
-    "paths": {
-      "@lunchbox-labs/tool-inspector-core": ["./packages/core/src/index.ts"]
-    },
     "lib": ["ESNext", "DOM"],
     "types": ["node"],
     "strict": true,
@@ -21,6 +17,7 @@
     "packages/core/src/**/*.ts",
     "packages/core/tests/**/*.ts",
     "packages/opencode/src/**/*.ts",
-    "packages/opencode/tests/**/*.ts"
+    "packages/opencode/tests/**/*.ts",
+    "packages/opencode/tsdown.config.ts"
   ]
 }

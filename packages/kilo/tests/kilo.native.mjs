@@ -24,7 +24,6 @@ assert.ok(
 );
 const ptyVersion = "1.1.0";
 const packageDirectory = fileURLToPath(new URL("../", import.meta.url));
-const coreDirectory = fileURLToPath(new URL("../../core/", import.meta.url));
 const cli = windows
   ? "@kilocode/cli-windows-x64-baseline"
   : "@kilocode/cli-linux-x64-baseline";
@@ -278,28 +277,26 @@ try {
     );
   }
   assert.equal(run(binary, ["--version"]).trim(), version);
-  // Kilo installs the plugin with its exact core dependency, which isn't on npm before a release.
-  const pack = (directory) =>
-    join(
-      root,
-      JSON.parse(
-        run(
-          process.execPath,
-          [
-            npm,
-            "pack",
-            "--ignore-scripts",
-            "--json",
-            "--pack-destination",
-            root,
-            "--cache",
-            cache,
-          ],
-          directory,
-        ),
-      )[0].filename,
-    );
-  const tarballs = [pack(coreDirectory), pack(packageDirectory)];
+  // Kilo installs the packed plugin, which has core bundled in.
+  const tarball = join(
+    root,
+    JSON.parse(
+      run(
+        process.execPath,
+        [
+          npm,
+          "pack",
+          "--ignore-scripts",
+          "--json",
+          "--pack-destination",
+          root,
+          "--cache",
+          cache,
+        ],
+        packageDirectory,
+      ),
+    )[0].filename,
+  );
   run(process.execPath, [
     npm,
     "install",
@@ -310,7 +307,7 @@ try {
     "--no-fund",
     "--cache",
     cache,
-    ...tarballs,
+    tarball,
   ]);
   const plugin = join(
     runtime,

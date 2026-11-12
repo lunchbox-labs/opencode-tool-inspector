@@ -24,13 +24,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "prebuild": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsdown",
     "prepack": "npm run build",
     "test:package": "node --experimental-strip-types --test tests/package.integration.ts"
-  },
-  "dependencies": {
-    "@lunchbox-labs/tool-inspector-core": "0.3.0"
   },
   "devDependencies": {
     "@kilocode/plugin": "7.8.27",

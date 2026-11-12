@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -10,78 +10,66 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath ?? "";
 assert.ok(npm !== "", "Run package tests through npm");
+const workspace = fileURLToPath(new URL("../../..", import.meta.url));
 const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
-const coreDirectory = fileURLToPath(new URL("../../core", import.meta.url));
-const tsc = fileURLToPath(
-  new URL("../../../node_modules/typescript/bin/tsc", import.meta.url),
-);
-const { devDependencies, dependencies, version } = JSON.parse(
+const tsc = join(workspace, "node_modules/typescript/bin/tsc");
+const { devDependencies, name } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
-) as {
-  devDependencies: Record<string, string>;
-  dependencies: Record<string, string>;
-  version: string;
-};
+) as { devDependencies: Record<string, string>; name: string };
 const rootManifest = JSON.parse(
   await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
 ) as { devDependencies: Record<string, string> };
 const core = JSON.parse(
   await readFile(new URL("../../core/package.json", import.meta.url), "utf8"),
-) as { name: string; version: string };
+) as { name: string };
+const dependencyFields = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "peerDependenciesMeta",
+  "optionalDependencies",
+  "bundleDependencies",
+  "bundledDependencies",
+];
 
-interface Packed {
-  filename: string;
-  files: { path: string }[];
-}
-
-async function pack(
-  directory: string,
-  destination: string,
-  signal: AbortSignal,
-): Promise<Packed> {
-  const packed = await execute(
-    process.execPath,
-    [
-      npm,
-      "pack",
-      "--ignore-scripts",
-      "--json",
-      "--pack-destination",
-      destination,
-    ],
-    { cwd: directory, timeout: 60_000, signal },
+/** The packages a built file imports, statically or dynamically. */
+function importedPackages(code: string): string[] {
+  const specifiers = [
+    ...code.matchAll(/\bfrom\s*"([^"]+)"/g),
+    ...code.matchAll(/\bimport\s*\(\s*"([^"]+)"\s*\)/g),
+    ...code.matchAll(/^\s*import\s*"([^"]+)"/gm),
+  ].map((match) => match[1]);
+  return [...new Set(specifiers)].filter(
+    (specifier) => !specifier.startsWith("."),
   );
-  const [result] = JSON.parse(packed.stdout) as Packed[];
-  return result;
-}
-
-function assertPackedFiles(packed: Packed, required: readonly string[]) {
-  const paths = packed.files.map((file) => file.path);
-  for (const path of [...required, "README.md", "LICENSE", "package.json"]) {
-    assert.ok(paths.includes(path), `Missing ${path} in ${packed.filename}`);
-  }
-  for (const path of paths) {
-    assert.ok(
-      path.startsWith("dist/") ||
-        ["README.md", "LICENSE", "package.json"].includes(path),
-      `Unexpected packed file: ${path} in ${packed.filename}`,
-    );
-  }
 }
 
 test(
-  "packed plugin installs with packed core and exposes only a loadable TUI entry with declarations",
+  "packed plugin installs on its own with core bundled in and exposes only a loadable TUI entry with declarations",
   { timeout: 180_000 },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "tool-inspector-package-"));
     t.after(() => rm(root, { recursive: true, force: true }));
-    // The adapter depends on core at its exact version, which npm takes from core's tarball.
-    assert.deepEqual(dependencies, { [core.name]: version });
-    assert.equal(core.version, version);
-    const corePacked = await pack(coreDirectory, root, t.signal);
-    assertPackedFiles(corePacked, ["dist/index.js", "dist/index.d.ts"]);
-    const packed = await pack(packageDirectory, root, t.signal);
-    assertPackedFiles(packed, ["dist/tui.js", "dist/tui.d.ts"]);
+    // The consumer is outside the workspace, so nothing resolves through its links.
+    const outside = relative(workspace, root);
+    assert.ok(outside.startsWith("..") || isAbsolute(outside), root);
+    const packed = await execute(
+      process.execPath,
+      [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
+      { cwd: packageDirectory, timeout: 60_000, signal: t.signal },
+    );
+    const [{ filename, files }] = JSON.parse(packed.stdout) as {
+      filename: string;
+      files: { path: string }[];
+    }[];
+    // One bundled file per export, with no shared chunks or source maps.
+    assert.deepEqual(files.map((file) => file.path).sort(), [
+      "LICENSE",
+      "README.md",
+      "dist/tui.d.ts",
+      "dist/tui.js",
+      "package.json",
+    ]);
     await execute(
       process.execPath,
       [
@@ -92,13 +80,46 @@ test(
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        join(root, corePacked.filename),
-        join(root, packed.filename),
+        join(root, filename),
         `@opencode-ai/plugin@${devDependencies["@opencode-ai/plugin"]}`,
         `@types/node@${rootManifest.devDependencies["@types/node"]}`,
       ],
       { timeout: 120_000, signal: t.signal },
     );
+    const installed = join(root, "node_modules", name);
+    const manifest = JSON.parse(
+      await readFile(join(installed, "package.json"), "utf8"),
+    ) as Record<string, Record<string, string> | undefined>;
+    for (const field of dependencyFields) {
+      assert.equal(
+        Object.hasOwn(manifest[field] ?? {}, core.name),
+        false,
+        `${field} names ${core.name}`,
+      );
+    }
+    // OpenCode supplies OpenTUI and the plugin types, so the package installs nothing else.
+    assert.equal(manifest.dependencies, undefined);
+    assert.equal(manifest.peerDependencies, undefined);
+    assert.equal(Object.hasOwn(manifest.engines ?? {}, "opencode"), false);
+    assert.equal(manifest.engines?.node, ">=22.18.0");
+    await assert.rejects(access(join(root, "node_modules", core.name)), {
+      code: "ENOENT",
+    });
+    // Core is inlined and every other import stays external: OpenTUI, which OpenCode maps
+    // to its own copy, and in the declarations OpenCode's plugin types.
+    const code = await readFile(join(installed, "dist/tui.js"), "utf8");
+    const declarations = await readFile(
+      join(installed, "dist/tui.d.ts"),
+      "utf8",
+    );
+    for (const text of [code, declarations]) {
+      assert.equal(text.includes(core.name), false);
+      assert.equal(text.includes("node_modules"), false);
+    }
+    assert.deepEqual(importedPackages(code), ["@opentui/core"]);
+    assert.deepEqual(importedPackages(declarations), [
+      "@opencode-ai/plugin/tui",
+    ]);
     // OpenCode resolves a package's server entry from ./server or its root export, so a
     // TUI-only package must export neither.
     await writeFile(
@@ -125,12 +146,15 @@ for (const specifier of ['@lunchbox-labs/opencode-tool-inspector', '@lunchbox-la
       timeout: 60_000,
       signal: t.signal,
     });
+    // The export keeps the type it had before the workspace: exactly { id, tui }.
     await writeFile(
       join(root, "consumer.mts"),
-      `import type { TuiPluginModule } from '@opencode-ai/plugin/tui';
+      `import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import tui from '@lunchbox-labs/opencode-tool-inspector/tui';
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const exact: Equal<typeof tui, { id: string; tui: TuiPlugin }> = true;
 const module: TuiPluginModule = tui;
-console.log(module.id);
+console.log(module.id, exact);
 `,
     );
     await execute(
@@ -147,38 +171,6 @@ console.log(module.id);
         join(root, "consumer.mts"),
       ],
       { cwd: root, timeout: 60_000, signal: t.signal },
-    );
-    const manifest = JSON.parse(
-      await readFile(
-        join(
-          root,
-          "node_modules/@lunchbox-labs/opencode-tool-inspector/package.json",
-        ),
-        "utf8",
-      ),
-    ) as Record<string, Record<string, string> | undefined>;
-    assert.deepEqual(manifest.dependencies, { [core.name]: version });
-    assert.equal(Object.hasOwn(manifest.engines ?? {}, "opencode"), false);
-    assert.equal(manifest.engines?.node, ">=22.18.0");
-    const installedCore = JSON.parse(
-      await readFile(
-        join(
-          root,
-          "node_modules/@lunchbox-labs/tool-inspector-core/package.json",
-        ),
-        "utf8",
-      ),
-    ) as Record<string, Record<string, string> | string | undefined>;
-    assert.equal(installedCore.version, version);
-    // Every export target is a file in the package.
-    assert.deepEqual(installedCore.exports, {
-      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
-    });
-    // Core has no runtime dependency on either host's packages.
-    assert.deepEqual(installedCore.dependencies ?? {}, {});
-    assert.equal(
-      (installedCore.engines as Record<string, string> | undefined)?.node,
-      ">=22.18.0",
     );
   },
 );

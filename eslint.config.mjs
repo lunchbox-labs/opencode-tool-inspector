@@ -12,12 +12,16 @@ const codeFiles = [
   "tests/**/*.mjs",
   "scripts/**/*.mjs",
 ];
-const typedFiles = ["packages/*/src/**/*.ts", "packages/*/tests/**/*.ts"];
+const typedFiles = [
+  "packages/*/src/**/*.ts",
+  "packages/*/tests/**/*.ts",
+  "packages/*/tsdown.config.ts",
+];
 
 export default defineConfig(
   globalIgnores(["**/node_modules/**", "**/coverage/**", "**/dist/**"]),
   {
-    files: [...codeFiles, "*.config.mjs"],
+    files: [...codeFiles, "*.config.mjs", "packages/*/tsdown.config.ts"],
     extends: [
       eslint.configs.recommended,
       comments.recommended,

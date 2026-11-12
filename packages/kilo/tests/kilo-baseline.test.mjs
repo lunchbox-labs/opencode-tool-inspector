@@ -11,6 +11,9 @@ const lock = JSON.parse(
 const manifest = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
+const core = JSON.parse(
+  await readFile(new URL("../../core/package.json", import.meta.url), "utf8"),
+);
 
 /** The lockfile entry this package resolves for a dependency: its own copy, else the hoisted one. */
 function resolved(name) {
@@ -62,4 +65,23 @@ test("TUI dev dependencies match the copies every supported Kilo host loads", ()
   }
   assert.equal(manifest.devDependencies["solid-js"], "1.9.12");
   assert.equal(resolved("solid-js").version, "1.9.12");
+});
+
+test("core is private source bundled into this package, which depends on nothing", () => {
+  // Core is never published, so nothing may install it; any runtime dependency it gains
+  // stays external in the bundle and must be a dependency of this package.
+  assert.equal(core.private, true);
+  assert.equal(lock.packages["packages/core"].dependencies, undefined);
+  assert.equal(core.dependencies, undefined);
+  assert.equal(core.peerDependencies, undefined);
+  for (const field of [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ]) {
+    assert.equal(Object.hasOwn(manifest[field] ?? {}, core.name), false, field);
+  }
+  assert.equal(manifest.dependencies, undefined);
+  assert.equal(manifest.peerDependencies, undefined);
 });

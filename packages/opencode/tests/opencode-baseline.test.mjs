@@ -76,12 +76,21 @@ test("core is typed against the same OpenCode build dependencies", () => {
   );
 });
 
-test("core declares no peer, so it gates no OpenCode version", () => {
-  // Core's declarations use OpenCode's plugin types, which it doesn't install;
-  // a peer range would make npm refuse installs next to a newer @opencode-ai/plugin.
+test("core is private source bundled into this package, which depends on nothing", () => {
+  // Core is never published, so nothing may install it; any runtime dependency it gains
+  // stays external in the bundle and must be a dependency of this package.
+  assert.equal(core.private, true);
+  assert.equal(lock.packages["packages/core"].dependencies, undefined);
+  assert.equal(core.dependencies, undefined);
   assert.equal(core.peerDependencies, undefined);
-  assert.equal(core.peerDependenciesMeta, undefined);
-  const entry = lock.packages["packages/core"];
-  assert.equal(entry.peerDependencies, undefined);
-  assert.equal(entry.peerDependenciesMeta, undefined);
+  for (const field of [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ]) {
+    assert.equal(Object.hasOwn(manifest[field] ?? {}, core.name), false, field);
+  }
+  assert.equal(manifest.dependencies, undefined);
+  assert.equal(manifest.peerDependencies, undefined);
 });

@@ -13,12 +13,12 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -p tsconfig.json && tsc -p packages/kilo/tsconfig.json && tsc -p packages/kilo/tsconfig.core.json",
-    "test": "node --experimental-strip-types --import ./scripts/core-source.mjs --test \"packages/*/tests/*.test.ts\" \"packages/*/tests/*.test.mjs\" \"tests/*.test.mjs\"",
+    "test": "node --experimental-strip-types --test \"packages/*/tests/*.test.ts\" \"packages/*/tests/*.test.mjs\" \"tests/*.test.mjs\"",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write packages/*/src packages/*/tests packages/*/package.json packages/*/tsconfig*.json tests scripts package.json tsconfig.json *.config.mjs",
-    "format:check": "prettier --check packages/*/src packages/*/tests packages/*/package.json packages/*/tsconfig*.json tests scripts package.json tsconfig.json *.config.mjs",
+    "format": "prettier --write packages/*/src packages/*/tests packages/*/package.json packages/*/tsconfig*.json packages/*/tsdown.config.ts tests scripts package.json tsconfig.json *.config.mjs",
+    "format:check": "prettier --check packages/*/src packages/*/tests packages/*/package.json packages/*/tsconfig*.json packages/*/tsdown.config.ts tests scripts package.json tsconfig.json *.config.mjs",
     "check": "npm run check:static && npm test",
     "test:package": "npm run build && npm run test:package --workspaces --if-present",
     "test:native": "npm run build && node scripts/native.mjs",
@@ -34,6 +34,7 @@
     "eslint-plugin-regexp": "3.3.3",
     "globals": "17.14.0",
     "prettier": "3.9.10",
+    "tsdown": "^0.23.7",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "yaml": "2.9.1"
