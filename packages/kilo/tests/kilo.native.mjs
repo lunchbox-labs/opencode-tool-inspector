@@ -28,6 +28,8 @@ const coreDirectory = fileURLToPath(new URL("../../core/", import.meta.url));
 const cli = windows
   ? "@kilocode/cli-windows-x64-baseline"
   : "@kilocode/cli-linux-x64-baseline";
+const npm = process.env.npm_execpath;
+assert.ok(npm, "Run this check through npm.");
 // scripts/native.mjs passes a directory it removes once this process has
 // exited: on Windows this process has node-pty's native addon loaded from it,
 // so the directory can't be removed from here.
@@ -38,8 +40,6 @@ const root = ownRoot
 const config = join(root, "config", "kilo");
 const project = join(root, "project");
 const runtime = join(root, "runtime");
-const npm = process.env.npm_execpath;
-assert.ok(npm, "Run this check through npm.");
 const env = {
   PATH: process.env.PATH,
   HOME: root,
@@ -118,6 +118,7 @@ function scriptTerminal(binary) {
     { cwd: project, env, detached: true, stdio: ["pipe", "pipe", "pipe"] },
   );
   const exited = () => script.exitCode !== null || script.signalCode !== null;
+  const closed = once(script, "exit");
   return {
     exited,
     onOutput(listener) {
@@ -126,12 +127,27 @@ function scriptTerminal(binary) {
       }
     },
     async stop() {
-      for (const signal of ["SIGTERM", "SIGKILL"]) {
+      for (const [signal, wait] of [
+        ["SIGTERM", 2000],
+        ["SIGKILL", 5000],
+      ]) {
         if (exited()) {
           return;
         }
-        process.kill(-script.pid, signal);
-        await Promise.race([once(script, "exit"), delay(2000)]);
+        try {
+          process.kill(-script.pid, signal);
+        } catch (error) {
+          // The process group has already gone.
+          if (error.code !== "ESRCH") {
+            throw error;
+          }
+        }
+        await Promise.race([closed, delay(wait)]);
+      }
+      if (!exited()) {
+        throw new Error(
+          `Kilo's terminal, process group ${script.pid}, did not exit after SIGKILL.`,
+        );
       }
     },
   };
@@ -190,6 +206,19 @@ async function conpty(binary, cache) {
 
 let child;
 let logs = "";
+let failed = false;
+// Runs a cleanup step, reporting its error instead of throwing when the check
+// has already failed, so that failure is the one the run ends with.
+async function cleanUp(step, action) {
+  try {
+    await action();
+  } catch (error) {
+    if (!failed) {
+      throw error;
+    }
+    console.error(`${step} also failed:`, error);
+  }
+}
 try {
   for (const directory of [
     config,
@@ -341,16 +370,21 @@ try {
   console.log(
     "No prompts or tool calls were sent to a model. Native smoke does not prove final call-time permission decisions.",
   );
+} catch (error) {
+  failed = true;
+  throw error;
 } finally {
-  await child?.stop();
+  await cleanUp("Stopping Kilo", () => child?.stop());
   if (ownRoot) {
     // Windows can hold an exited process's files for a moment.
-    await rm(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 500,
-    });
+    await cleanUp("Removing the check's directory", () =>
+      rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 500,
+      }),
+    );
   }
 }
 // node-pty leaves pipes and a worker port open on Windows after its terminal
