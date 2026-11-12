@@ -39,7 +39,12 @@ function validatePackage(
   if (manifest.name !== name) {
     throw new Error(`The npm package name in ${directory} must be ${name}.`);
   }
-  if (typeof manifest.version !== "string" || manifest.version === "0.0.0") {
+  // 0.0.0 and its pre-releases, such as the 0.0.0-bootstrap.0 placeholder
+  // published by hand to set up trusted publishing, are never released.
+  if (
+    typeof manifest.version !== "string" ||
+    /^0\.0\.0(?:-|$)/.test(manifest.version)
+  ) {
     throw new Error("Publishing requires a non-placeholder semantic version.");
   }
   if (prerelease && !prereleaseVersion.test(manifest.version)) {

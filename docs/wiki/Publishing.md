@@ -21,14 +21,24 @@ The publish job has `id-token: write` for OIDC and `contents: read`. It installs
 
 ## Bootstrap a new package
 
-npm adds a trusted publisher only to a package that already exists, and Verify stops a run while any of the three packages is missing from npm, so nothing is half-published. A maintainer bootstraps each new package once, by hand:
+npm adds a trusted publisher only to a package that already exists, and Release stops at verification while any of the three packages has never been published. `@lunchbox-labs/tool-inspector-core` and `@lunchbox-labs/kilo-tool-inspector` were added in 0.3.0 and need this once each before their first Release run:
 
-1. In an empty directory, write a `package.json` with only the package's `name`, the version `0.0.0-bootstrap.0`, `"license": "MIT"` and the `repository` from its package in this repository.
-2. Sign in to npm as a member of the `lunchbox-labs` organization and run `npm publish --access public --tag bootstrap`. The placeholder holds no code, and Release never publishes `0.0.0` versions.
-3. On npmjs.com, add the package's trusted publisher with the settings above.
-4. Run Release with **dry_run** set to check the whole run up to npm, then run it again without it.
+1. Publish a placeholder by hand, signed in to npm as a maintainer of the `lunchbox-labs` organization, shown here for the Kilo package. Work in an empty directory outside this repository with only a minimal `package.json`, not the built package, so the placeholder has no code or dependencies and an accidental install of it doesn't fail on a missing core:
 
-Optionally, mark the placeholder with `npm deprecate <name>@0.0.0-bootstrap.0 "Placeholder for trusted publishing; install a released version."` once the first release is out.
+   ```sh
+   mkdir bootstrap && cd bootstrap
+   echo '{}' > package.json
+   npm pkg set name=@lunchbox-labs/kilo-tool-inspector version=0.0.0-bootstrap.0 license=MIT description="Placeholder; install a released version" repository.type=git repository.url=git+https://github.com/lunchbox-labs/opencode-tool-inspector.git repository.directory=packages/kilo
+   npm publish --access public --tag bootstrap
+   ```
+
+2. Mark the placeholder as deprecated, so an install of it says what to use instead: `npm deprecate @lunchbox-labs/kilo-tool-inspector@0.0.0-bootstrap.0 "Placeholder; install a released version"`.
+3. In the package's settings on npm, add the trusted publisher described above.
+4. Run Release with **dry_run** to confirm verification passes, then run it for real.
+
+npm points `latest` at a package's first version whatever tag it was published under, so `latest` names the placeholder until the first stable release moves it; a pre-release run publishes under `next` and leaves `latest` on the placeholder. `npm dist-tag ls <package>` shows where each tag points. Release refuses `0.0.0` and its pre-releases, the placeholder included, so a release can't collide with it.
+
+The check in Verify covers only packages that are missing from npm. It can't tell whether a trusted publisher is set up, and a dry run stops before the publish job, so it doesn't exercise OIDC either. A missing or wrong trusted publisher fails Publish npm at that package, after the packages before it were published. Fix the trusted publisher, then re-run only the failed jobs within the artifact's three days: Publish npm skips the packages npm already holds with the same tarball and publishes the rest.
 
 ## Prepare and run a release
 
@@ -45,7 +55,7 @@ The run's summary names the version as soon as the **Release version** job finis
 
 ## What the run does
 
-**Release version** stops a run started on any other branch, reads the version from the three packages and stops unless they all have the same one. **Verify** then requires the checked-out commit to match the run's commit, stops when any of the three packages doesn't exist on npm yet, and stops before building when `v<version>` is already tagged or any of the three packages already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, its dependency on core and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the three builds and uploads the tarballs with SHA-256 checksums.
+**Release version** stops a run started on any other branch, reads the version from the three packages and stops unless they all have the same one. **Verify** then requires the checked-out commit to match the run's commit, stops when any of the three packages has never been published (see [Bootstrap a new package](#bootstrap-a-new-package)), and stops before building when `v<version>` is already tagged or any of the three packages already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, its dependency on core and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the three builds and uploads the tarballs with SHA-256 checksums.
 
 **Check** runs the [Check workflow](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
 

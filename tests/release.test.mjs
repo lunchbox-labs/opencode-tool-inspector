@@ -109,6 +109,16 @@ test("release validation takes a pre-release version only in a pre-release run",
     () => validateRelease(manifests(), "v1.2.3", { prerelease: true }),
     /pre-release semantic version/,
   );
+  for (const version of ["0.0.0-bootstrap.0", "0.0.0-beta.1"]) {
+    assert.throws(
+      () =>
+        validate(manifests({ version }), `v${version}`, lockFor(version), {
+          prerelease: true,
+        }),
+      /non-placeholder/,
+      version,
+    );
+  }
   for (const version of [
     "1.2.3-",
     "1.2.3-beta..1",

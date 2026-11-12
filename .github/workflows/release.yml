@@ -126,9 +126,10 @@ jobs:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: node scripts/validate-release.mjs
       # npm takes a trusted publisher only for a package that exists, so a new
-      # package needs its bootstrap version (see the Publishing wiki page)
-      # before any run. Stopping here keeps a run from publishing core and then
-      # failing on a host package.
+      # package needs its bootstrap version (see the Publishing wiki page). A
+      # package that was never published would fail Publish npm after the
+      # packages before it were published, so stop before then. This doesn't
+      # check trusted publishers: a missing one still fails Publish npm.
       - name: Require every package to exist on npm
         env:
           NPM_PACKAGES: ${{ steps.release.outputs.names }}
