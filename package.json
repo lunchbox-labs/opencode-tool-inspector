@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "npm run build --workspaces",
-    "typecheck": "tsc -p tsconfig.json && tsc -p packages/kilo/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p packages/kilo/tsconfig.json && tsc -p packages/kilo/tsconfig.core.json",
     "test": "node --experimental-strip-types --conditions=tool-inspector-source --test \"packages/*/tests/*.test.ts\" \"packages/*/tests/*.test.mjs\" \"tests/*.test.mjs\"",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write packages/*/src packages/*/tests packages/*/package.json packages/*/tsconfig*.json tests scripts package.json tsconfig.json *.config.mjs",

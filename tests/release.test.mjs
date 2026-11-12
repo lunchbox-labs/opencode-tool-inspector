@@ -287,7 +287,18 @@ test("a manual run on main verifies the packages' shared version, runs Check, pu
   const refuse = verify.steps.findIndex(
     (step) => step.name === "Refuse a version that is already released",
   );
-  assert.ok(validateStep >= 0 && refuse > validateStep);
+  const exist = verify.steps.findIndex(
+    (step) => step.name === "Require every package to exist on npm",
+  );
+  assert.ok(validateStep >= 0 && exist > validateStep && refuse > exist);
+  assert.deepEqual(verify.steps[exist].env, {
+    NPM_PACKAGES: "${{ steps.release.outputs.names }}",
+  });
+  assert.equal(
+    workflow.jobs.publish["timeout-minutes"],
+    15,
+    "publishing three packages with provenance needs more than five minutes",
+  );
   assert.deepEqual(verify.steps[validateStep].env, {
     RELEASE_PRERELEASE: "${{ inputs.prerelease }}",
     RELEASE_TAG: "${{ needs.version.outputs.tag }}",
@@ -946,6 +957,50 @@ test(
     assert.match(unreachable.stdout, /Could not check whether tag v1\.2\.3/);
     const offline = await run(
       missingTag,
+      `echo "npm error code ECONNRESET" >&2; exit 1`,
+    );
+    assert.equal(offline.code, 1);
+    assert.match(offline.stderr, /ECONNRESET/);
+  },
+);
+
+test(
+  "a run stops before building unless every package already exists on npm",
+  linuxOnly,
+  async () => {
+    // absent names the packages npm answers E404 for.
+    const run = (absent, failure = `echo "npm error code E404" >&2; exit 1`) =>
+      runStep(
+        "verify",
+        {
+          npm: [
+            `if [ "$1" = view ] && [ "$3" = name ]; then`,
+            ...absent.map(
+              (name) => `  if [ "$2" = "${name}" ]; then ${failure}; fi`,
+            ),
+            `  echo "$2"`,
+            `fi`,
+          ].join("\n"),
+        },
+        { NPM_PACKAGES: names.join(" ") },
+        "Require every package to exist on npm",
+      );
+    const all = await run([]);
+    assert.equal(all.code, 0, all.stderr);
+    assert.deepEqual(
+      all.calls,
+      names.map((name) => `npm view ${name} name`),
+    );
+    const fresh = await run(names.slice(0, 1).concat(names.slice(2)));
+    assert.equal(fresh.code, 1);
+    assert.ok(
+      fresh.stdout.includes(
+        `::error::These packages are not on npm yet: ${names[0]} ${names[2]}.`,
+      ),
+      fresh.stdout,
+    );
+    const offline = await run(
+      names.slice(1, 2),
       `echo "npm error code ECONNRESET" >&2; exit 1`,
     );
     assert.equal(offline.code, 1);

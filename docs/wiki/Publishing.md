@@ -12,12 +12,23 @@ It publishes them to npm in that order, so core is on npm before the host packag
 
 The workflow expects these settings, configured through the respective services. This page describes the required setup, not confirmation of its current state.
 
-- **npm trusted publishers:** one for each of the three packages, each with organization `lunchbox-labs`, repository `opencode-tool-inspector`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. `@lunchbox-labs/opencode-tool-inspector` already has one; `@lunchbox-labs/tool-inspector-core` and `@lunchbox-labs/kilo-tool-inspector` need theirs before their first release. npm only lets you add a trusted publisher to a package that exists, so a maintainer publishes the first version of each new package, or a placeholder for it, by hand and then adds its trusted publisher. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
+- **npm trusted publishers:** one for each of the three packages, each with organization `lunchbox-labs`, repository `opencode-tool-inspector`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. `@lunchbox-labs/opencode-tool-inspector` already has one; `@lunchbox-labs/tool-inspector-core` and `@lunchbox-labs/kilo-tool-inspector` need theirs before their first release, as [Bootstrap a new package](#bootstrap-a-new-package) describes. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
 - **`release` environment:** allows deployments from `main` only. It holds no secrets or variables.
 - **Actions policy:** only maintainers may start Release, and Wiki may run only on pushes to `main`. Both can write to the repository.
 - **Tag rulesets:** a ruleset blocks updating and deleting `v*` tags. No ruleset blocks creating them, because Release creates the tag itself.
 
 The publish job has `id-token: write` for OIDC and `contents: read`. It installs a trusted-publishing-capable npm version and enables provenance. The workflow does not use a long-lived npm token. Only the GitHub release job has `contents: write`, and it runs no repository code. Both jobs run in the `release` environment.
+
+## Bootstrap a new package
+
+npm adds a trusted publisher only to a package that already exists, and Verify stops a run while any of the three packages is missing from npm, so nothing is half-published. A maintainer bootstraps each new package once, by hand:
+
+1. In an empty directory, write a `package.json` with only the package's `name`, the version `0.0.0-bootstrap.0`, `"license": "MIT"` and the `repository` from its package in this repository.
+2. Sign in to npm as a member of the `lunchbox-labs` organization and run `npm publish --access public --tag bootstrap`. The placeholder holds no code, and Release never publishes `0.0.0` versions.
+3. On npmjs.com, add the package's trusted publisher with the settings above.
+4. Run Release with **dry_run** set to check the whole run up to npm, then run it again without it.
+
+Optionally, mark the placeholder with `npm deprecate <name>@0.0.0-bootstrap.0 "Placeholder for trusted publishing; install a released version."` once the first release is out.
 
 ## Prepare and run a release
 
@@ -34,7 +45,7 @@ The run's summary names the version as soon as the **Release version** job finis
 
 ## What the run does
 
-**Release version** stops a run started on any other branch, reads the version from the three packages and stops unless they all have the same one. **Verify** then requires the checked-out commit to match the run's commit, and stops before building when `v<version>` is already tagged or any of the three packages already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, its dependency on core and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the three builds and uploads the tarballs with SHA-256 checksums.
+**Release version** stops a run started on any other branch, reads the version from the three packages and stops unless they all have the same one. **Verify** then requires the checked-out commit to match the run's commit, stops when any of the three packages doesn't exist on npm yet, and stops before building when `v<version>` is already tagged or any of the three packages already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, its dependency on core and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the three builds and uploads the tarballs with SHA-256 checksums.
 
 **Check** runs the [Check workflow](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
 

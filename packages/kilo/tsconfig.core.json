@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Typechecks core against Kilo's plugin types, which core otherwise sees only as
+    // OpenCode's, so a change in Kilo's API shape fails here and not at runtime.
+    "paths": {
+      "@opencode-ai/plugin": [
+        "../../node_modules/@kilocode/plugin/dist/index.d.ts"
+      ],
+      "@opencode-ai/plugin/tui": [
+        "../../node_modules/@kilocode/plugin/dist/tui.d.ts"
+      ],
+      "@opentui/core": ["./node_modules/@opentui/core"],
+      "@opentui/keymap": ["./node_modules/@opentui/keymap"],
+      "@opentui/keymap/extras": [
+        "./node_modules/@opentui/keymap/src/extras/index.d.ts"
+      ],
+      "@opentui/solid": ["./node_modules/@opentui/solid"]
+    }
+  },
+  "include": ["../core/src/**/*.ts"]
+}
