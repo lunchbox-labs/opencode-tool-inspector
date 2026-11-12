@@ -1,9 +1,10 @@
 name: Release
-# Run by hand on main. The run releases the version the core, OpenCode and
-# Kilo packages share: it refuses a version that already has a tag or any of
-# the three packages on npm, runs Check on the release commit, publishes the
-# verified tarballs to npm, then creates the v<version> tag and a published
-# GitHub release with the tarballs attached.
+# Run by hand on main. The run releases the version the OpenCode and Kilo
+# packages share: it refuses a version that already has a tag or either
+# package on npm, runs Check on the release commit, publishes the verified
+# tarballs to npm, then creates the v<version> tag and a published GitHub
+# release with the tarballs attached. Core is private and bundled into both
+# packages, so it is never packed or published.
 on:
   workflow_dispatch:
     inputs:
@@ -63,9 +64,9 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          version="$(jq -r .version packages/core/package.json packages/opencode/package.json packages/kilo/package.json | sort -u)"
+          version="$(jq -r .version packages/opencode/package.json packages/kilo/package.json | sort -u)"
           if [ "$(printf '%s\n' "$version" | wc -l)" -ne 1 ]; then
-            echo "::error::packages/core, packages/opencode and packages/kilo must have the same version in package.json."
+            echo "::error::packages/opencode and packages/kilo must have the same version in package.json."
             exit 1
           fi
           core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
@@ -177,14 +178,15 @@ jobs:
           done
       - name: Install dependencies
         run: npm ci
-      # Builds every package's dist/ for the tarballs and tests the packed
-      # packages. The full checks run in the Check job against the same commit.
+      # Builds the host packages' dist/, with core bundled in, for the tarballs
+      # and tests the packed packages. The full checks run in the Check job
+      # against the same commit.
       - name: Run package tests
         run: npm run test:package
       - name: Pack the verified builds
         run: |
           mkdir release
-          npm pack --workspaces --ignore-scripts --pack-destination release
+          npm pack --workspace packages/opencode --workspace packages/kilo --ignore-scripts --pack-destination release
           cd release
           sha256sum ./*.tgz > SHA256SUMS
       - name: Upload verified packages
@@ -239,10 +241,10 @@ jobs:
           NPM_VERSION: ${{ needs.verify.outputs.version }}
           # This repository and npm packages are public.
           NPM_CONFIG_PROVENANCE: "true"
-        # Publishes core first, then the OpenCode and Kilo packages that depend
-        # on it. Re-running this job after a partial or full publication skips
-        # each package whose registry copy is this exact tarball, and stops at
-        # one whose registry copy is another tarball.
+        # Publishes the OpenCode package, then the Kilo package. Re-running this
+        # job after a partial or full publication skips each package whose
+        # registry copy is this exact tarball, and stops at one whose registry
+        # copy is another tarball.
         run: |
           sha256sum --check SHA256SUMS
           for package in $NPM_PACKAGES; do

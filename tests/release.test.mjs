@@ -10,16 +10,13 @@ const repository = {
 };
 const coreName = "@lunchbox-labs/tool-inspector-core";
 const packages = {
-  "packages/core": { name: coreName, version: "1.2.3" },
   "packages/opencode": {
     name: "@lunchbox-labs/opencode-tool-inspector",
     version: "1.2.3",
-    dependencies: { [coreName]: "1.2.3" },
   },
   "packages/kilo": {
     name: "@lunchbox-labs/kilo-tool-inspector",
     version: "1.2.3",
-    dependencies: { [coreName]: "1.2.3" },
   },
 };
 const names = Object.values(packages).map(({ name }) => name);
@@ -27,14 +24,11 @@ const names = Object.values(packages).map(({ name }) => name);
 /** Every package's manifest at one version, with `change` applied to the one in `directory`. */
 function manifests({ version = "1.2.3", directory, change = {} } = {}) {
   return Object.fromEntries(
-    Object.entries(packages).map(([path, { dependencies, ...manifest }]) => [
+    Object.entries(packages).map(([path, manifest]) => [
       path,
       {
         ...manifest,
         version,
-        ...(dependencies === undefined
-          ? {}
-          : { dependencies: { [coreName]: version } }),
         repository: { ...repository, directory: path },
         publishConfig: { access: "public" },
         ...(path === directory ? change : {}),
@@ -73,7 +67,7 @@ test("release validation rejects stale or missing lockfile versions", () => {
   assert.throws(() => validate(manifests(), "v1.2.3", undefined), /lockfile/);
 });
 
-test("release validation accepts explicit public and scoped restricted stable releases of all three packages", () => {
+test("release validation accepts explicit public and scoped restricted stable releases of both packages", () => {
   assert.deepEqual(validateRelease(manifests(), "v1.2.3"), {
     names,
     version: "1.2.3",
@@ -86,9 +80,8 @@ test("release validation accepts explicit public and scoped restricted stable re
   assert.equal(validateRelease(restricted, "v1.2.3").access, "restricted");
 });
 
-test("release validation publishes core first, then the OpenCode and Kilo packages", () => {
+test("release validation publishes the OpenCode package, then the Kilo package, and never core", () => {
   assert.deepEqual(names, [
-    coreName,
     "@lunchbox-labs/opencode-tool-inspector",
     "@lunchbox-labs/kilo-tool-inspector",
   ]);
@@ -169,16 +162,38 @@ test("release validation rejects private, provisional, mismatched, prerelease, a
     }
   }
   for (const directory of ["packages/opencode", "packages/kilo"]) {
-    for (const dependencies of [undefined, {}, { [coreName]: "^1.2.3" }]) {
-      assert.throws(
-        () =>
-          validateRelease(
-            manifests({ directory, change: { dependencies } }),
-            "v1.2.3",
-          ),
-        /exactly its own version/,
-      );
+    // Core is bundled and never on npm, so no released package may name it.
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ]) {
+      for (const range of ["1.2.3", "*"]) {
+        assert.throws(
+          () =>
+            validateRelease(
+              manifests({
+                directory,
+                change: { [field]: { [coreName]: range } },
+              }),
+              "v1.2.3",
+            ),
+          /the build bundles it/,
+          `${directory} ${field}`,
+        );
+      }
     }
+    assert.equal(
+      validateRelease(
+        manifests({
+          directory,
+          change: { dependencies: { "jsonc-parser": "^3.3.1" } },
+        }),
+        "v1.2.3",
+      ).version,
+      "1.2.3",
+    );
   }
   const missing = manifests();
   delete missing["packages/kilo"];
@@ -307,7 +322,7 @@ test("a manual run on main verifies the packages' shared version, runs Check, pu
   assert.equal(
     workflow.jobs.publish["timeout-minutes"],
     15,
-    "publishing three packages with provenance needs more than five minutes",
+    "publishing two packages with provenance needs more than five minutes",
   );
   assert.deepEqual(verify.steps[validateStep].env, {
     RELEASE_PRERELEASE: "${{ inputs.prerelease }}",
@@ -321,7 +336,7 @@ test("a manual run on main verifies the packages' shared version, runs Check, pu
   }
   const pack = verify.steps.findIndex((step) =>
     step.run?.includes(
-      "npm pack --workspaces --ignore-scripts --pack-destination release",
+      "npm pack --workspace packages/opencode --workspace packages/kilo --ignore-scripts --pack-destination release",
     ),
   );
   assert.ok(pack > previous);
@@ -592,7 +607,7 @@ const linuxOnly = {
 };
 
 test(
-  "the npm step publishes core, then OpenCode, then Kilo under the tag, skipping each same tarball and stopping on another",
+  "the npm step publishes OpenCode, then Kilo under the tag, skipping each same tarball and stopping on another",
   linuxOnly,
   async () => {
     // views maps a package name to what npm view answers for it.
@@ -649,7 +664,7 @@ test(
     );
     assert.match(
       partial.stdout,
-      /tool-inspector-core@1\.2\.3 is already on npm with this tarball/,
+      /opencode-tool-inspector@1\.2\.3 is already on npm with this tarball/,
     );
     const done = await run(
       Object.fromEntries(names.map((name) => [name, "same"])),
@@ -661,7 +676,7 @@ test(
     assert.deepEqual(publishes(other), [publish(names[0])]);
     assert.match(
       other.stdout,
-      /opencode-tool-inspector@1\.2\.3 is already on npm with a different tarball/,
+      /kilo-tool-inspector@1\.2\.3 is already on npm with a different tarball/,
     );
     const offline = await run({ [names[0]]: "offline" });
     assert.equal(offline.code, 1);
@@ -813,7 +828,7 @@ test(
           draft: false,
           html_url: releasePage,
           assets: tarballFiles
-            .filter((file) => file !== fileOf(names[2]))
+            .filter((file) => file !== fileOf(names[1]))
             .map((file) => ({ name: file })),
         },
       ],
@@ -1001,11 +1016,11 @@ test(
       all.calls,
       names.map((name) => `npm view ${name} name`),
     );
-    const fresh = await run(names.slice(0, 1).concat(names.slice(2)));
+    const fresh = await run(names);
     assert.equal(fresh.code, 1);
     assert.ok(
       fresh.stdout.includes(
-        `::error::These packages are not on npm yet: ${names[0]} ${names[2]}.`,
+        `::error::These packages are not on npm yet: ${names[0]} ${names[1]}.`,
       ),
       fresh.stdout,
     );
@@ -1118,8 +1133,8 @@ test(
       ["1.2", false],
       ["1.2.3\nname=x", false],
       ["1.2.3-beta\nname=x", true],
-      [["1.2.3", "1.2.3", "1.2.4"], false],
-      [["1.2.3-beta.1", "1.2.3-beta.2", "1.2.3-beta.1"], true],
+      [["1.2.3", "1.2.4"], false],
+      [["1.2.3-beta.1", "1.2.3-beta.2"], true],
     ]) {
       const refused = await run(version, { prerelease });
       assert.equal(refused.code, 1, version);

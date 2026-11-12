@@ -8,16 +8,22 @@ const prereleaseVersion = new RegExp(
   "i",
 );
 
-/** The released packages in publication order: core first, since both hosts depend on it. */
+/** The released packages in publication order. */
 export const releasePackages = [
-  { directory: "packages/core", name: "@lunchbox-labs/tool-inspector-core" },
   {
     directory: "packages/opencode",
     name: "@lunchbox-labs/opencode-tool-inspector",
   },
   { directory: "packages/kilo", name: "@lunchbox-labs/kilo-tool-inspector" },
 ];
-const coreName = releasePackages[0].name;
+/** Private source that the build bundles into each released package; never on npm. */
+const coreName = "@lunchbox-labs/tool-inspector-core";
+const dependencyFields = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
 const repositoryUrl =
   "git+https://github.com/lunchbox-labs/opencode-tool-inspector.git";
 
@@ -89,13 +95,14 @@ function validatePackage(
       "This workflow publishes only to https://registry.npmjs.org.",
     );
   }
-  if (
-    name !== coreName &&
-    manifest.dependencies?.[coreName] !== manifest.version
-  ) {
-    throw new Error(
-      `${name} must depend on ${coreName} at exactly its own version.`,
-    );
+  // Core isn't on npm, so a package that names it in any dependency field
+  // can't be installed from the registry.
+  for (const field of dependencyFields) {
+    if (Object.hasOwn(manifest[field] ?? {}, coreName)) {
+      throw new Error(
+        `${name} must not list ${coreName} in ${field}; the build bundles it.`,
+      );
+    }
   }
   const locked = lock?.packages?.[directory];
   if (locked?.name !== manifest.name || locked.version !== manifest.version) {
