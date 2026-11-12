@@ -1,0 +1,43 @@
+{
+  "name": "@lunchbox-labs/kilo-tool-inspector",
+  "version": "0.3.0",
+  "description": "Inspect the tools available to Kilo agents from the TUI",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lunchbox-labs/opencode-tool-inspector.git",
+    "directory": "packages/kilo"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "exports": {
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "default": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "npm run build",
+    "test:package": "node --experimental-strip-types --test tests/package.integration.ts"
+  },
+  "devDependencies": {
+    "@kilocode/plugin": "7.8.27",
+    "@kilocode/sdk": "7.8.27",
+    "@opentui/core": "0.5.11",
+    "@opentui/keymap": "0.5.11",
+    "@opentui/solid": "0.5.11",
+    "solid-js": "1.9.12"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

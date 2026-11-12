@@ -6,13 +6,22 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-const codeFiles = ["src/**/*.ts", "tests/**/*.{mjs,ts}", "scripts/**/*.mjs"];
-const typedFiles = ["src/**/*.ts", "tests/**/*.ts"];
+const codeFiles = [
+  "packages/*/src/**/*.ts",
+  "packages/*/tests/**/*.{mjs,ts}",
+  "tests/**/*.mjs",
+  "scripts/**/*.mjs",
+];
+const typedFiles = [
+  "packages/*/src/**/*.ts",
+  "packages/*/tests/**/*.ts",
+  "packages/*/tsdown.config.ts",
+];
 
 export default defineConfig(
   globalIgnores(["**/node_modules/**", "**/coverage/**", "**/dist/**"]),
   {
-    files: [...codeFiles, "*.config.mjs"],
+    files: [...codeFiles, "*.config.mjs", "packages/*/tsdown.config.ts"],
     extends: [
       eslint.configs.recommended,
       comments.recommended,
@@ -132,7 +141,7 @@ export default defineConfig(
     },
   },
   {
-    files: ["tests/**/*.ts"],
+    files: ["packages/*/tests/**/*.ts"],
     // Tests supply deliberately partial SDK doubles and Promise-returning async stubs.
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",

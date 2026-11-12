@@ -10,7 +10,7 @@ type DialogElement = ReturnType<TuiPluginApi["ui"]["DialogAlert"]>;
 
 /** Renders a tool's detail sections in a keyboard-scrollable box inside the host's dialog frame. */
 export async function createDetailViewer(api: TuiPluginApi) {
-  // OpenCode supplies its shared runtime; importing this entrypoint stays Node-safe.
+  // The host supplies its shared runtime; importing this entrypoint stays Node-safe.
   const {
     BoxRenderable,
     RenderableEvents,

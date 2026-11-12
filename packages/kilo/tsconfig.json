@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Kilo bundles OpenTUI 0.5.11, which npm installs under this package, while the hoisted
+    // @kilocode/plugin would otherwise resolve the root's 0.4.5 copy for OpenCode.
+    "paths": {
+      "@opentui/core": ["./node_modules/@opentui/core"],
+      "@opentui/keymap": ["./node_modules/@opentui/keymap"],
+      "@opentui/keymap/extras": [
+        "./node_modules/@opentui/keymap/src/extras/index.d.ts"
+      ],
+      "@opentui/solid": ["./node_modules/@opentui/solid"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "tsdown.config.ts"]
+}

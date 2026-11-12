@@ -1,0 +1,19 @@
+{
+  "name": "@lunchbox-labs/tool-inspector-core",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Tool Inspector's shared source, bundled into the OpenCode and Kilo packages",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.19.5",
+    "@opencode-ai/sdk": "1.19.5",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "solid-js": "1.9.12"
+  }
+}

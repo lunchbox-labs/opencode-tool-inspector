@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
-import { fakeHost } from "./tui-harness.ts";
+import { fakeHost } from "../../core/tests/tui-harness.ts";
 import plugin from "../src/tui.ts";
 
 // Registered after the harness, so this redirect runs first and the viewer can't load.
@@ -12,7 +12,8 @@ registerHooks({
       /\/detail-viewer\.(?:ts|js)$/.test(context.parentURL ?? "")
     ) {
       return {
-        url: new URL("./opentui-unavailable.ts", import.meta.url).href,
+        url: new URL("../../core/tests/opentui-unavailable.ts", import.meta.url)
+          .href,
         shortCircuit: true,
       };
     }

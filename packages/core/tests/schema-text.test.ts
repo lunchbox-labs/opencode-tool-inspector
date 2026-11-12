@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { linesText, schemaLines } from "../src/schema-text.ts";
+import {
+  schemaLines as hostSchemaLines,
+  linesText,
+} from "../src/schema-text.ts";
 
+// The host's name only appears in notes about what the host reported.
+const schemaLines = (schema: unknown) => hostSchemaLines(schema, "OpenCode");
 const render = (schema: unknown) => linesText(schemaLines(schema));
 
 test("properties show their type, whether they're required, constraints and description", () => {

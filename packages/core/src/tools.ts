@@ -18,12 +18,12 @@ const sourceLabels: Record<ModelSource, string> = {
 
 export interface BrowsableTool {
   id: string;
-  /** Undefined when OpenCode reported only the tool's id. */
+  /** Undefined when the host reported only the tool's id. */
   description: string | undefined;
   parameters: unknown;
 }
 
-/** OpenCode's placeholder for unknown tool calls, never offered to agents as a real tool. */
+/** The host's placeholder for unknown tool calls, never offered to agents as a real tool. */
 const internalToolIds = new Set(["invalid"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,7 +38,7 @@ export function chosenModelLabel(model: ChosenModel): string {
   return `${modelLabel(model)} (${sourceLabels[model.source]})`;
 }
 
-/** The model of the session's latest user message, which OpenCode resolves tools for on the next prompt. */
+/** The model of the session's latest user message, which the host resolves tools for on the next prompt. */
 export function sessionModel(
   messages: readonly unknown[],
 ): ModelChoice | undefined {
@@ -75,7 +75,7 @@ export function configuredModel(model: unknown): ModelChoice | undefined {
   };
 }
 
-/** The first connected provider's default model, which OpenCode falls back to when none is configured. */
+/** The first connected provider's default model, which the host falls back to when none is configured. */
 export function providerDefaultModel(
   connectedProviderIds: readonly string[],
   defaults: unknown,
@@ -96,7 +96,7 @@ function byId(left: BrowsableTool, right: BrowsableTool): number {
   return left.id.localeCompare(right.id);
 }
 
-/** Keeps well-formed entries from OpenCode's tool list, sorted by id. */
+/** Keeps well-formed entries from the host's tool list, sorted by id. */
 export function toolsFromList(response: unknown): BrowsableTool[] | undefined {
   if (!Array.isArray(response)) {
     return undefined;
@@ -121,7 +121,7 @@ export function toolsFromList(response: unknown): BrowsableTool[] | undefined {
   return [...tools.values()].sort(byId);
 }
 
-/** Tool ids without details, for when OpenCode can't resolve tools for a model. */
+/** Tool ids without details, for when the host can't resolve tools for a model. */
 export function toolsFromIds(response: unknown): BrowsableTool[] | undefined {
   if (!Array.isArray(response)) {
     return undefined;

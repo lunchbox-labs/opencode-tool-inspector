@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentAccessLines } from "../src/agent-text.ts";
-import { resolveToolAgentAccess } from "../src/agents.ts";
-import { linesText } from "../src/schema-text.ts";
+import { agentAccessLines } from "../../core/src/agent-text.ts";
+import { resolveToolAgentAccess } from "../../core/src/agents.ts";
+import { linesText } from "../../core/src/schema-text.ts";
+import { opencodeHost } from "../src/host.ts";
 
 const allowAll = { permission: "*", pattern: "*", action: "allow" } as const;
 
@@ -12,7 +13,7 @@ function render(
   options?: Parameters<typeof resolveToolAgentAccess>[2],
 ) {
   const [access] = resolveToolAgentAccess([tool], agents, options);
-  return linesText(agentAccessLines(access));
+  return linesText(agentAccessLines(access, opencodeHost));
 }
 
 test("tools sharing a permission name it, and subagent access is shown where it differs", () => {

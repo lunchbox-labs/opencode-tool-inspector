@@ -31,6 +31,8 @@ const maximumReferenceLookups = 50_000;
 class SchemaTooLarge extends Error {}
 
 interface Rendering {
+  /** The host's name, for notes about what it reported. */
+  hostName: string;
   root: JsonObject;
   lines: TextLine[];
   remainingLookups: number;
@@ -219,8 +221,8 @@ const definitionSections = ["#/$defs/", "#/definitions/"];
 
 /**
  * The schema a local reference names, and the reference as the schema spells it. OpenCode 1.19
- * renames zod's `$defs` to `definitions` without rewriting the references to them, so a miss
- * under either name is retried under the other.
+ * and Kilo 7.8 rename zod's `$defs` to `definitions` without rewriting the references to them,
+ * so a miss under either name is retried under the other.
  */
 function referenceTarget(
   root: JsonObject,
@@ -882,9 +884,9 @@ function writeProperties(
   });
 }
 
-function rawSchemaLines(schema: JsonObject): TextLine[] {
+function rawSchemaLines(hostName: string, schema: JsonObject): TextLine[] {
   return [
-    [muted("OpenCode reported this input schema:")],
+    [muted(`${hostName} reported this input schema:`)],
     ...JSON.stringify(schema, undefined, indentWidth)
       .split("\n")
       .map((line) => [muted(line)]),
@@ -923,7 +925,7 @@ function rootLines(rendering: Rendering, schema: JsonObject): TextLine[] {
   const type = typeName(schema, rendering, noneVisiting, 0);
   if (type === "object" || type === "any") {
     return hasCombinators(resolved)
-      ? capped(rawSchemaLines(schema))
+      ? capped(rawSchemaLines(rendering.hostName, schema))
       : [[muted("Takes no input.")]];
   }
   return [[plain("Input is "), { text: type, tone: "name" }]];
@@ -931,13 +933,15 @@ function rootLines(rendering: Rendering, schema: JsonObject): TextLine[] {
 
 /**
  * Renders a tool's input JSON schema as indented, readable lines. A shared definition's fields
- * are listed once, and a schema too large to show is cut short with a note.
+ * are listed once, and a schema too large to show is cut short with a note. `hostName` names the
+ * host in notes about what it reported.
  */
-export function schemaLines(schema: unknown): TextLine[] {
+export function schemaLines(schema: unknown, hostName: string): TextLine[] {
   if (!isObject(schema)) {
-    return [[muted("OpenCode did not report an input schema.")]];
+    return [[muted(`${hostName} did not report an input schema.`)]];
   }
   const rendering: Rendering = {
+    hostName,
     root: schema,
     lines: [],
     remainingLookups: maximumReferenceLookups,
@@ -956,7 +960,7 @@ export function schemaLines(schema: unknown): TextLine[] {
         [muted("… Schema too large to show in full.")],
       ];
     }
-    return capped(rawSchemaLines(schema));
+    return capped(rawSchemaLines(rendering.hostName, schema));
   }
 }
 

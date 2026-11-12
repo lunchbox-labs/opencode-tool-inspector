@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fakeHost } from "./tui-harness.ts";
+import { fakeHost } from "../../core/tests/tui-harness.ts";
 import plugin from "../src/tui.ts";
 
 const readTool = {

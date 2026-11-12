@@ -13,5 +13,11 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "packages/core/src/**/*.ts",
+    "packages/core/tests/**/*.ts",
+    "packages/opencode/src/**/*.ts",
+    "packages/opencode/tests/**/*.ts",
+    "packages/opencode/tsdown.config.ts"
+  ]
 }

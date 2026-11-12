@@ -9,6 +9,7 @@ import {
   resolveToolAgentAccess,
 } from "./agents.ts";
 import { createDetailViewer } from "./detail-viewer.ts";
+import type { Host } from "./host.ts";
 import { linesText } from "./schema-text.ts";
 import { type ToolDetail, toolDetail } from "./tool-detail.ts";
 import {
@@ -37,7 +38,7 @@ interface ToolCatalog {
   model: ChosenModel | undefined;
   /** Why the list has names only, shown once as a toast. */
   notice: string | undefined;
-  /** Each tool's access per agent, undefined when OpenCode's agents couldn't be read. */
+  /** Each tool's access per agent, undefined when the host's agents couldn't be read. */
   access: ReadonlyMap<string, ToolAgentAccess> | undefined;
   /** Why tool details leave out agents, shown once as a toast. */
   agentsNotice: string | undefined;
@@ -62,7 +63,7 @@ function errorText(error: unknown): string {
   return String(error);
 }
 
-/** Names of connected MCP servers, whose tools OpenCode's tool list leaves out. */
+/** Names of connected MCP servers, whose tools the host's tool list leaves out. */
 function connectedMcpServers(api: TuiPluginApi): string[] {
   try {
     return api.state
@@ -74,12 +75,12 @@ function connectedMcpServers(api: TuiPluginApi): string[] {
   }
 }
 
-function mcpNotice(servers: readonly string[]): string | undefined {
+function mcpNotice(host: Host, servers: readonly string[]): string | undefined {
   if (servers.length === 0) {
     return undefined;
   }
   const names = servers.join(", ");
-  return `Tools from MCP servers (${names}) aren't listed, because OpenCode only adds them when it runs a prompt.`;
+  return `Tools from MCP servers (${names}) aren't listed, because ${host.name} only adds them when it runs a prompt.`;
 }
 
 function currentSessionId(api: TuiPluginApi): string | undefined {
@@ -105,7 +106,7 @@ async function chooseModel(
     (provider) => provider.id,
   );
   const configured = configuredModel(api.state.config.model);
-  // OpenCode skips a configured model whose provider isn't connected.
+  // The host skips a configured model whose provider isn't connected.
   if (
     configured !== undefined &&
     (connectedProviderIds.length === 0 ||
@@ -130,13 +131,14 @@ async function chooseModel(
 }
 
 async function readAgents(
+  host: Host,
   api: TuiPluginApi,
   signal: AbortSignal,
 ): Promise<AgentInput[]> {
   // Guards hosts whose client predates the agents route.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the host supplies the client at runtime.
   if (typeof api.client.app?.agents !== "function") {
-    throw new Error("this OpenCode doesn't list agents");
+    throw new Error(`this ${host.name} doesn't list agents`);
   }
   const response = await api.client.app.agents(
     { directory: api.state.path.directory },
@@ -155,7 +157,7 @@ async function readAgents(
 }
 
 /**
- * The permission rules of the current session's top-level session, which OpenCode applies after
+ * The permission rules of the current session's top-level session, which the host applies after
  * each agent's own rules. Sessions usually have none. When a parent isn't loaded, the topmost
  * session found is used, since a child session carries copies of its parent's deny rules.
  */
@@ -208,6 +210,7 @@ function accessByTool(
 }
 
 async function readToolList(
+  host: Host,
   api: TuiPluginApi,
   signal: AbortSignal,
 ): Promise<ToolList> {
@@ -245,29 +248,30 @@ async function readToolList(
       listFailure ??
         modelFailure ??
         (response.error === undefined
-          ? "OpenCode did not return a readable tool list."
+          ? `${host.name} did not return a readable tool list.`
           : errorText(response.error)),
     );
   }
   const namesOnly =
     model === undefined
       ? modelFailure === undefined
-        ? "No model is selected, so this lists every registered tool without details. Pick a model to see what OpenCode offers it."
+        ? `No model is selected, so this lists every registered tool without details. Pick a model to see what ${host.name} offers it.`
         : `Could not work out the current model (${modelFailure}), so this lists tool names only.`
-      : `OpenCode did not return tool details for ${chosenModelLabel(model)} (${listFailure ?? "no reason given"}), so this lists tool names only.`;
+      : `${host.name} did not return tool details for ${chosenModelLabel(model)} (${listFailure ?? "no reason given"}), so this lists tool names only.`;
   return { tools, model: undefined, notice: namesOnly };
 }
 
 async function readCatalog(
+  host: Host,
   api: TuiPluginApi,
   signal: AbortSignal,
 ): Promise<ToolCatalog> {
   let agentsFailure: string | undefined;
-  const agentsRead = readAgents(api, signal).catch((error: unknown) => {
+  const agentsRead = readAgents(host, api, signal).catch((error: unknown) => {
     agentsFailure = errorText(error);
     return undefined;
   });
-  const list = await readToolList(api, signal);
+  const list = await readToolList(host, api, signal);
   const agents = await agentsRead;
   let access: Map<string, ToolAgentAccess> | undefined;
   if (agents !== undefined) {
@@ -282,7 +286,7 @@ async function readCatalog(
     access,
     agentsNotice:
       access === undefined
-        ? `Could not read OpenCode's agents (${agentsFailure ?? "no reason given"}), so tool details don't show which agents can use each tool.`
+        ? `Could not read ${host.name}'s agents (${agentsFailure ?? "no reason given"}), so tool details don't show which agents can use each tool.`
         : undefined,
   };
 }
@@ -295,7 +299,7 @@ function inputCountLabel(tool: BrowsableTool): string | undefined {
   return count === 1 ? "1 input" : `${count} inputs`;
 }
 
-function registerToolBrowser(api: TuiPluginApi): void {
+function registerToolBrowser(host: Host, api: TuiPluginApi): void {
   const toast = (variant: "info" | "warning", message: string) => {
     api.ui.toast({
       variant,
@@ -368,6 +372,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
       const listRevision = revision;
       const sameView = viewContext();
       const detail = toolDetail(
+        host,
         tool,
         catalog.model === undefined
           ? undefined
@@ -462,7 +467,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
       () =>
         api.ui.DialogAlert({
           title: "Loading tools",
-          message: "Reading the tools OpenCode offers…",
+          message: `Reading the tools ${host.name} offers…`,
         }),
       "medium",
       abort,
@@ -471,7 +476,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
     // Load the viewer alongside the list so opening a tool doesn't wait for it.
     detailViewer().catch(() => undefined);
     try {
-      const catalog = await readCatalog(api, controller.signal);
+      const catalog = await readCatalog(host, api, controller.signal);
       if (loading !== revision) {
         return;
       }
@@ -481,13 +486,13 @@ function registerToolBrowser(api: TuiPluginApi): void {
       }
       if (catalog.tools.length === 0) {
         close();
-        toast("info", "OpenCode reported no tools.");
+        toast("info", `${host.name} reported no tools.`);
         return;
       }
       const notices = [
         catalog.notice,
         catalog.agentsNotice,
-        mcpNotice(connectedMcpServers(api)),
+        mcpNotice(host, connectedMcpServers(api)),
       ].filter((notice) => notice !== undefined);
       if (notices.length > 0) {
         toast(
@@ -504,7 +509,7 @@ function registerToolBrowser(api: TuiPluginApi): void {
         if (sameView()) {
           toast(
             "warning",
-            `Could not read tools from OpenCode: ${errorText(error)}`,
+            `Could not read tools from ${host.name}: ${errorText(error)}`,
           );
         }
       }
@@ -542,12 +547,14 @@ function registerToolBrowser(api: TuiPluginApi): void {
   });
 }
 
-const ToolInspectorTui: TuiPlugin = (api) => {
-  registerToolBrowser(api);
-  return Promise.resolve();
-};
-
-export default {
-  id: "tool-inspector",
-  tui: ToolInspectorTui,
-} satisfies TuiPluginModule;
+/** The Tool Inspector TUI plugin for one host, typed as the OpenCode package has always exported it. */
+export function createToolInspectorTui(host: Host): {
+  id: string;
+  tui: TuiPlugin;
+} {
+  const tui: TuiPlugin = (api) => {
+    registerToolBrowser(host, api);
+    return Promise.resolve();
+  };
+  return { id: "tool-inspector", tui } satisfies TuiPluginModule;
+}
