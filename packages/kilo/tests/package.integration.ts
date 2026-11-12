@@ -16,9 +16,16 @@ const tsc = join(workspace, "node_modules/typescript/bin/tsc");
 const { devDependencies, name } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 ) as { devDependencies: Record<string, string>; name: string };
-const rootManifest = JSON.parse(
-  await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
-) as { devDependencies: Record<string, string> };
+// The packed install has no lockfile, so it takes the locked @types/node
+// version rather than the root manifest's range.
+const nodeTypes = (
+  JSON.parse(
+    await readFile(
+      new URL("../../../package-lock.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { packages: Record<string, { version: string }> }
+).packages["node_modules/@types/node"].version;
 const core = JSON.parse(
   await readFile(new URL("../../core/package.json", import.meta.url), "utf8"),
 ) as { name: string };
@@ -82,7 +89,7 @@ test(
         "--no-fund",
         join(root, filename),
         `@kilocode/plugin@${devDependencies["@kilocode/plugin"]}`,
-        `@types/node@${rootManifest.devDependencies["@types/node"]}`,
+        `@types/node@${nodeTypes}`,
       ],
       { timeout: 120_000, signal: t.signal },
     );
