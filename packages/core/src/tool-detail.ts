@@ -1,5 +1,6 @@
 import { agentAccessLines } from "./agent-text.ts";
 import type { ToolAgentAccess } from "./agents.ts";
+import type { Host } from "./host.ts";
 import { type TextLine, schemaLines } from "./schema-text.ts";
 import type { BrowsableTool } from "./tools.ts";
 
@@ -26,15 +27,16 @@ function textLines(text: string): TextLine[] {
 }
 
 /**
- * The detail view's content. The Agents section is left out when OpenCode's agents couldn't be
+ * The detail view's content. The Agents section is left out when the host's agents couldn't be
  * read.
  */
 export function toolDetail(
+  host: Host,
   tool: BrowsableTool,
   modelLabel: string | undefined,
   access?: ToolAgentAccess,
 ): ToolDetail {
-  const detailsMissing = "OpenCode reported only this tool's name.";
+  const detailsMissing = `${host.name} reported only this tool's name.`;
   return {
     title: tool.id,
     subtitle:
@@ -45,11 +47,11 @@ export function toolDetail(
         lines:
           tool.description === undefined && tool.parameters === undefined
             ? muted(detailsMissing)
-            : schemaLines(tool.parameters),
+            : schemaLines(tool.parameters, host.name),
       },
       ...(access === undefined
         ? []
-        : [{ heading: "Agents", lines: agentAccessLines(access) }]),
+        : [{ heading: "Agents", lines: agentAccessLines(access, host) }]),
       {
         heading: "Description",
         lines:

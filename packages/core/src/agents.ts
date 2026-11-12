@@ -1,16 +1,17 @@
 /**
  * Works out which agents may use each tool, following the permission rules
- * OpenCode 1.19 applies when it offers tools to a model and when a tool asks
- * for permission.
+ * OpenCode 1.19 and Kilo 7.8 apply when they offer tools to a model and when a
+ * tool asks for permission.
  *
  * Pass the agents from `client.app.agents()` and either the items of
  * `client.tool.list({ provider, model })` or the ids from `client.tool.ids()`.
- * Each agent's `permission` ruleset already combines OpenCode's defaults, the
+ * Each agent's `permission` ruleset already combines the host's defaults, the
  * global `permission` and legacy `tools` settings and the agent's own rules,
  * and disabled agents are already left out. Only permissions are applied here:
- * OpenCode also withholds some tools depending on the model, such as
+ * the host also withholds some tools depending on the model, such as
  * `websearch` without a search provider, and `tool.list` already leaves those
- * out for the model it is given.
+ * out for the model it is given. Kilo also applies input-sensitive guards,
+ * saved approvals and hard limits at call time, which these rules don't show.
  */
 
 export type PermissionAction = "allow" | "ask" | "deny";
@@ -36,11 +37,11 @@ export interface AgentInput {
 export type ToolInput = string | { readonly id: string };
 
 export interface ToolAgentAccessOptions {
-  /** `experimental.primary_tools` from the OpenCode config: tools denied to agents running as subagents. */
+  /** `experimental.primary_tools` from the host config: tools denied to agents running as subagents. */
   readonly primaryTools?: readonly string[];
   /**
-   * The permission ruleset of the session the agents would run in, which OpenCode applies after the
-   * agent's rules. Pass a top-level session's ruleset: when it spawns a subagent, OpenCode copies only
+   * The permission ruleset of the session the agents would run in, which the host applies after the
+   * agent's rules. Pass a top-level session's ruleset: when it spawns a subagent, the host copies only
    * its deny and `external_directory` rules into the subagent's session.
    */
   readonly sessionPermission?: unknown;
@@ -54,15 +55,15 @@ export interface PatternAccess {
 
 export interface AccessDecision {
   /**
-   * Access for inputs that no pattern in `exceptions` matches. OpenCode can still ask at call time for
+   * Access for inputs that no pattern in `exceptions` matches. The host can still ask at call time for
    * paths outside the project (the `external_directory` permission), and an `ask` the user already
    * answered with "always" may already be allowed for matching calls.
    */
   readonly access: ToolAccess;
-  /** Pattern-specific access in OpenCode's precedence order: a later entry wins over an earlier one when both match. */
+  /** Pattern-specific access in the host's precedence order: a later entry wins over an earlier one when both match. */
   readonly exceptions: readonly PatternAccess[];
   /**
-   * Whether OpenCode offers the tool to the model at all. It withholds a tool only when the last rule for
+   * Whether the host offers the tool to the model at all. It withholds a tool only when the last rule for
    * its permission denies the `*` pattern, so a tool can be offered even when every call is denied.
    * `undefined` when the rules can't be read.
    */
@@ -80,7 +81,7 @@ export interface AgentToolAccess extends AccessDecision {
 
 export interface ToolAgentAccess {
   readonly tool: string;
-  /** The permission name OpenCode checks for this tool, such as `edit` for `write`. */
+  /** The permission name the host checks for this tool, such as `edit` for `write`. */
   readonly permission: string;
   readonly agents: readonly AgentToolAccess[];
 }
@@ -188,7 +189,7 @@ function runsOnWindows(): boolean {
   return typeof process !== "undefined" && process.platform === "win32";
 }
 
-// Same matching as OpenCode's wildcard helper, including its trailing " *"
+// Same matching as the host's wildcard helper, including its trailing " *"
 // special case, slash normalization and case-insensitive matching on Windows.
 function compileWildcard(pattern: string, flags: string): RegExp {
   let expression = pattern
@@ -270,7 +271,7 @@ function denyAll(permission: string): PermissionRuleInput {
   return { permission, pattern: "*", action: "deny" };
 }
 
-// Mirrors the session rules OpenCode's task tool gives a subagent.
+// Mirrors the session rules the host's task tool gives a subagent.
 function subagentSessionRules(
   agentRules: readonly PermissionRuleInput[],
   parentSessionRules: readonly PermissionRuleInput[],

@@ -3,17 +3,32 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 const lock = JSON.parse(
-  await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+  await readFile(
+    new URL("../../../package-lock.json", import.meta.url),
+    "utf8",
+  ),
 );
 const manifest = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
+const core = JSON.parse(
+  await readFile(new URL("../../core/package.json", import.meta.url), "utf8"),
+);
+
+/** The lockfile entry this package resolves for a dependency: its own copy, else the hoisted one. */
+function resolved(name) {
+  return (
+    lock.packages[`packages/opencode/node_modules/${name}`] ??
+    lock.packages[`node_modules/${name}`]
+  );
+}
 
 test("published package has no OpenCode engine gate and retains the Node requirement", () => {
   assert.equal(Object.hasOwn(manifest.engines, "opencode"), false);
   assert.equal(manifest.engines.node, ">=22.18.0");
-  assert.equal(Object.hasOwn(lock.packages[""].engines, "opencode"), false);
-  assert.equal(lock.packages[""].engines.node, manifest.engines.node);
+  const entry = lock.packages["packages/opencode"];
+  assert.equal(Object.hasOwn(entry.engines, "opencode"), false);
+  assert.equal(entry.engines.node, manifest.engines.node);
 });
 
 test("SDK and plugin build dependencies share one exact version within the supported host range", async () => {
@@ -32,6 +47,9 @@ test("SDK and plugin build dependencies share one exact version within the suppo
     major === floorMajor && minor === floorMinor && patch >= floorPatch,
     `${plugin} is below the supported floor ${support.floor}`,
   );
+  for (const name of ["@opencode-ai/plugin", "@opencode-ai/sdk"]) {
+    assert.equal(resolved(name).version, plugin, name);
+  }
 });
 
 test("TUI dev dependencies match the copies every supported OpenCode host loads", () => {
@@ -41,8 +59,19 @@ test("TUI dev dependencies match the copies every supported OpenCode host loads"
   // solid-js stays at 1.9.12, the exact peer of @opentui 0.4.5.
   for (const name of ["@opentui/core", "@opentui/keymap", "@opentui/solid"]) {
     assert.equal(manifest.devDependencies[name], "0.4.5", name);
-    assert.equal(lock.packages[`node_modules/${name}`].version, "0.4.5", name);
+    assert.equal(resolved(name).version, "0.4.5", name);
   }
   assert.equal(manifest.devDependencies["solid-js"], "1.9.12");
-  assert.equal(lock.packages["node_modules/solid-js"].version, "1.9.12");
+  assert.equal(resolved("solid-js").version, "1.9.12");
+});
+
+test("core is typed against the same OpenCode build dependencies", () => {
+  // Core's sources take OpenCode's TUI types; the Kilo package adapts its API to them.
+  for (const [name, version] of Object.entries(manifest.devDependencies)) {
+    assert.equal(core.devDependencies[name], version, name);
+  }
+  assert.deepEqual(
+    Object.keys(core.devDependencies).sort(),
+    Object.keys(manifest.devDependencies).sort(),
+  );
 });
