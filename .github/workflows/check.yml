@@ -41,8 +41,11 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
-          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          # Packages keep their own copies where their host pins differ, such as Kilo's OpenTUI.
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/*/package.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
@@ -51,11 +54,64 @@ jobs:
         if: steps.dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Run the static checks
         # Typecheck, lint and formatting are platform-independent; Linux covers them.
         if: runner.os == 'Linux'
         run: npm run check:static
+      # Covers the core, OpenCode and Kilo packages.
       - run: npm test
       - run: npm run test:package
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # Only Kilo has a native TUI check.
+        host: [kilo]
+        version: [latest-compatible, floor]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      NATIVE_HOST: ${{ matrix.host }}
+      KILO_TEST_VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Packages keep their own copies where their host pins differ, such as Kilo's OpenTUI.
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/*/package.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save installed dependencies
+        # Save before the checks so a failing run still seeds the cache for the next one.
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+      - name: Load the packed plugin in a native ${{ matrix.host }} TUI
+        run: npm run test:native
