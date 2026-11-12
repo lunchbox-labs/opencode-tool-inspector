@@ -169,11 +169,17 @@ async function conpty(binary, cache) {
       if (done) {
         return;
       }
+      // taskkill ends Kilo's whole process tree. node-pty's own kill asks the
+      // console for its processes, which fails once they are gone, so it only
+      // runs when taskkill didn't end the terminal.
       spawnSync("taskkill", ["/PID", String(terminal.pid), "/T", "/F"], {
         timeout: 5000,
       });
-      terminal.kill();
       await Promise.race([closed, delay(5000)]);
+      if (!done) {
+        terminal.kill();
+        await Promise.race([closed, delay(5000)]);
+      }
     },
   };
 }
@@ -333,5 +339,11 @@ try {
   );
 } finally {
   await child?.stop();
-  await rm(root, { recursive: true, force: true });
+  // Windows can hold an exited process's files for a moment.
+  await rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 500,
+  });
 }
