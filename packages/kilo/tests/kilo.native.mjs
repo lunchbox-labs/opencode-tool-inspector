@@ -345,3 +345,7 @@ try {
     retryDelay: 500,
   });
 }
+// node-pty keeps handles open on Windows after its terminal has exited, so
+// the check would never end. This is reached only once every assertion and
+// the cleanup passed; a failure above ends the process with an error instead.
+process.exit(0);
