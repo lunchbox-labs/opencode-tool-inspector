@@ -28,7 +28,13 @@ const coreDirectory = fileURLToPath(new URL("../../core/", import.meta.url));
 const cli = windows
   ? "@kilocode/cli-windows-x64-baseline"
   : "@kilocode/cli-linux-x64-baseline";
-const root = await mkdtemp(join(tmpdir(), "kilo-tool-inspector-"));
+// scripts/native.mjs passes a directory it removes once this process has
+// exited: on Windows this process has node-pty's native addon loaded from it,
+// so the directory can't be removed from here.
+const ownRoot = process.env.NATIVE_CHECK_ROOT === undefined;
+const root = ownRoot
+  ? await mkdtemp(join(tmpdir(), "kilo-tool-inspector-"))
+  : process.env.NATIVE_CHECK_ROOT;
 const config = join(root, "config", "kilo");
 const project = join(root, "project");
 const runtime = join(root, "runtime");
@@ -361,14 +367,16 @@ try {
   if (windows) {
     console.error(leftovers() || "no processes left");
   }
-  // Windows can hold an exited process's files for a moment.
-  await rm(root, {
-    recursive: true,
-    force: true,
-    maxRetries: 10,
-    retryDelay: 500,
-  });
-  trace("removed the check's directory");
+  if (ownRoot) {
+    // Windows can hold an exited process's files for a moment.
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 500,
+    });
+    trace("removed the check's directory");
+  }
   if (windows) {
     console.error(
       `active resources: ${process.getActiveResourcesInfo().join(", ")}`,

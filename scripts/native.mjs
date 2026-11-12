@@ -1,5 +1,8 @@
 // Runs the native TUI check for one host, named by NATIVE_HOST. Only Kilo has one.
 import { spawnSync } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const checks = { kilo: "../packages/kilo/tests/kilo.native.mjs" };
@@ -10,13 +13,29 @@ if (!Object.hasOwn(checks, host)) {
   );
   process.exit(1);
 }
-const { status, error } = spawnSync(
-  process.execPath,
-  [fileURLToPath(new URL(checks[host], import.meta.url))],
-  { stdio: "inherit" },
-);
-if (error) {
-  throw error;
+// The check works in this directory, which is removed only once the check has
+// exited, since Windows keeps a running process's loaded modules from being deleted.
+const root = await mkdtemp(join(tmpdir(), `${host}-tool-inspector-`));
+let result;
+try {
+  result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL(checks[host], import.meta.url))],
+    { stdio: "inherit", env: { ...process.env, NATIVE_CHECK_ROOT: root } },
+  );
+} finally {
+  const started = Date.now();
+  // Windows can hold an exited process's files for a moment.
+  await rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 500,
+  });
+  console.error(`Removed the check's directory in ${Date.now() - started}ms.`);
 }
-console.error(`The ${host} native check exited with status ${status}.`);
-process.exit(status ?? 1);
+if (result.error) {
+  throw result.error;
+}
+console.error(`The ${host} native check exited with status ${result.status}.`);
+process.exit(result.status ?? 1);
