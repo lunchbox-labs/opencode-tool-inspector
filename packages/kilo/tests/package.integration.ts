@@ -175,12 +175,10 @@ console.log(module.id);
     assert.deepEqual(installedCore.exports, {
       ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
     });
-    // Core has no runtime dependency on either host's packages, and its peer on
-    // OpenCode's plugin, for its declarations' types, is optional and not installed.
+    // Core has no runtime dependency or peer on either host's packages, so a Kilo
+    // install doesn't get OpenCode's plugin package.
     assert.deepEqual(installedCore.dependencies ?? {}, {});
-    assert.deepEqual(installedCore.peerDependenciesMeta, {
-      "@opencode-ai/plugin": { optional: true },
-    });
+    assert.equal(installedCore.peerDependencies, undefined);
     await assert.rejects(
       readFile(join(root, "node_modules/@opencode-ai/plugin/package.json")),
       { code: "ENOENT" },

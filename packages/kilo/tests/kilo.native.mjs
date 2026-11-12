@@ -119,6 +119,8 @@ function scriptTerminal(binary) {
   );
   const exited = () => script.exitCode !== null || script.signalCode !== null;
   const closed = once(script, "exit");
+  // A failure to start is reported by the check, not as an unhandled rejection.
+  closed.catch(() => {});
   return {
     exited,
     onOutput(listener) {

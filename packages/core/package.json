@@ -28,14 +28,6 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build"
   },
-  "peerDependencies": {
-    "@opencode-ai/plugin": "1.19.x"
-  },
-  "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@opencode-ai/plugin": "1.19.5",
     "@opencode-ai/sdk": "1.19.5",
