@@ -2,7 +2,15 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "customConditions": [],
+    // Builds against core's declarations, keeping Kilo's OpenTUI copies.
+    "paths": {
+      "@opentui/core": ["./node_modules/@opentui/core"],
+      "@opentui/keymap": ["./node_modules/@opentui/keymap"],
+      "@opentui/keymap/extras": [
+        "./node_modules/@opentui/keymap/src/extras/index.d.ts"
+      ],
+      "@opentui/solid": ["./node_modules/@opentui/solid"]
+    },
     "rootDir": "src",
     "outDir": "dist",
     "declaration": true,

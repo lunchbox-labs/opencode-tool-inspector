@@ -171,8 +171,20 @@ console.log(module.id);
       ),
     ) as Record<string, Record<string, string> | string | undefined>;
     assert.equal(installedCore.version, version);
-    // Core has no runtime dependency on either host's packages.
+    // Every export target is a file in the package.
+    assert.deepEqual(installedCore.exports, {
+      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+    });
+    // Core has no runtime dependency on either host's packages, and its peer on
+    // OpenCode's plugin, for its declarations' types, is optional and not installed.
     assert.deepEqual(installedCore.dependencies ?? {}, {});
+    assert.deepEqual(installedCore.peerDependenciesMeta, {
+      "@opencode-ai/plugin": { optional: true },
+    });
+    await assert.rejects(
+      readFile(join(root, "node_modules/@opencode-ai/plugin/package.json")),
+      { code: "ENOENT" },
+    );
     assert.equal(
       (installedCore.engines as Record<string, string> | undefined)?.node,
       ">=22.18.0",

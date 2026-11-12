@@ -170,6 +170,10 @@ console.log(module.id);
       ),
     ) as Record<string, Record<string, string> | string | undefined>;
     assert.equal(installedCore.version, version);
+    // Every export target is a file in the package.
+    assert.deepEqual(installedCore.exports, {
+      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+    });
     // Core has no runtime dependency on either host's packages.
     assert.deepEqual(installedCore.dependencies ?? {}, {});
     assert.equal(

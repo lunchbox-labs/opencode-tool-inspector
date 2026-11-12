@@ -14,6 +14,9 @@ const manifest = JSON.parse(
 const core = JSON.parse(
   await readFile(new URL("../../core/package.json", import.meta.url), "utf8"),
 );
+const policy = JSON.parse(
+  await readFile(new URL("./opencode.json", import.meta.url), "utf8"),
+);
 
 /** The lockfile entry this package resolves for a dependency: its own copy, else the hoisted one. */
 function resolved(name) {
@@ -74,4 +77,17 @@ test("core is typed against the same OpenCode build dependencies", () => {
     Object.keys(core.devDependencies).sort(),
     Object.keys(manifest.devDependencies).sort(),
   );
+});
+
+test("core declares OpenCode's plugin, whose types its declarations use, as an optional peer", () => {
+  // Optional, so a Kilo install of core doesn't pull OpenCode's plugin package.
+  assert.deepEqual(core.peerDependencies, {
+    "@opencode-ai/plugin": policy.range,
+  });
+  assert.deepEqual(core.peerDependenciesMeta, {
+    "@opencode-ai/plugin": { optional: true },
+  });
+  const entry = lock.packages["packages/core"];
+  assert.deepEqual(entry.peerDependencies, core.peerDependencies);
+  assert.deepEqual(entry.peerDependenciesMeta, core.peerDependenciesMeta);
 });

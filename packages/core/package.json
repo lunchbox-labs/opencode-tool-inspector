@@ -14,7 +14,6 @@
   },
   "exports": {
     ".": {
-      "tool-inspector-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -28,6 +27,14 @@
     "prebuild": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "1.19.x"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.19.5",

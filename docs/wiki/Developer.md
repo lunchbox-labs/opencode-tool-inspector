@@ -24,7 +24,7 @@ A `Host` profile holds what differs between hosts: the host's name in messages, 
 
 Shared tooling (TypeScript, ESLint, Prettier and the test runner) lives at the root. Tests live with the package they test: core's shared logic in `packages/core/tests`, and each host's output, baseline and packed-package tests in its own `tests` folder. The release workflow tests are in the root `tests` folder.
 
-When working from source, the root scripts resolve core through its `tool-inspector-source` export condition, so unit tests and typechecking don't need a build. The build compiles core first, then the host packages against core's declarations.
+When working from source, the root scripts resolve core to its TypeScript source, with `paths` in the tsconfig files for typechecking and the [core-source.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/core-source.mjs) resolve hook for `npm test`, so unit tests and typechecking don't need a build. The build compiles core first, then the host packages against core's declarations.
 
 ## Build local packages
 
