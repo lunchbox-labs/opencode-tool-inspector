@@ -169,17 +169,15 @@ async function conpty(binary, cache) {
       if (done) {
         return;
       }
-      // taskkill ends Kilo's whole process tree. node-pty's own kill asks the
-      // console for its processes, which fails once they are gone, so it only
-      // runs when taskkill didn't end the terminal.
+      // node-pty's kill ends every process on the console and closes the
+      // terminal, which otherwise keeps this process running. It lists the
+      // console's processes first, so it runs while Kilo is still there;
+      // taskkill then ends anything of Kilo's left outside the console.
+      terminal.kill();
+      await Promise.race([closed, delay(5000)]);
       spawnSync("taskkill", ["/PID", String(terminal.pid), "/T", "/F"], {
         timeout: 5000,
       });
-      await Promise.race([closed, delay(5000)]);
-      if (!done) {
-        terminal.kill();
-        await Promise.race([closed, delay(5000)]);
-      }
     },
   };
 }
