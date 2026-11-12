@@ -336,7 +336,31 @@ try {
     "No prompts or tool calls were sent to a model. Native smoke does not prove final call-time permission decisions.",
   );
 } finally {
+  const started = Date.now();
+  const trace = (step) =>
+    console.error(`cleanup +${Date.now() - started}ms: ${step}`);
+  // Processes still running from the check's directory, which can keep the step open.
+  const leftovers = () =>
+    windows
+      ? spawnSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-Command",
+            `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${root.split("\\").at(-1)}*' -or $_.ExecutablePath -like '*${root.split("\\").at(-1)}*' } | Format-Table -AutoSize ProcessId,ParentProcessId,Name,CommandLine | Out-String -Width 300`,
+          ],
+          { encoding: "utf8", timeout: 30_000 },
+        ).stdout.trim()
+      : "";
+  if (windows) {
+    console.error(leftovers() || "no processes running");
+  }
+  trace("stopping Kilo");
   await child?.stop();
+  trace("stopped Kilo");
+  if (windows) {
+    console.error(leftovers() || "no processes left");
+  }
   // Windows can hold an exited process's files for a moment.
   await rm(root, {
     recursive: true,
@@ -344,6 +368,12 @@ try {
     maxRetries: 10,
     retryDelay: 500,
   });
+  trace("removed the check's directory");
+  if (windows) {
+    console.error(
+      `active resources: ${process.getActiveResourcesInfo().join(", ")}`,
+    );
+  }
 }
 // node-pty keeps handles open on Windows after its terminal has exited, so
 // the check would never end. This is reached only once every assertion and

@@ -18,4 +18,5 @@ const { status, error } = spawnSync(
 if (error) {
   throw error;
 }
+console.error(`The ${host} native check exited with status ${status}.`);
 process.exit(status ?? 1);
