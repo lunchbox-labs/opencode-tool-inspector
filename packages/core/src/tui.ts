@@ -547,11 +547,14 @@ function registerToolBrowser(host: Host, api: TuiPluginApi): void {
   });
 }
 
-/** The Tool Inspector TUI plugin for one host. */
-export function createToolInspectorTui(host: Host): TuiPluginModule {
+/** The Tool Inspector TUI plugin for one host, typed as the OpenCode package has always exported it. */
+export function createToolInspectorTui(host: Host): {
+  id: string;
+  tui: TuiPlugin;
+} {
   const tui: TuiPlugin = (api) => {
     registerToolBrowser(host, api);
     return Promise.resolve();
   };
-  return { id: "tool-inspector", tui };
+  return { id: "tool-inspector", tui } satisfies TuiPluginModule;
 }
