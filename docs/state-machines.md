@@ -2,7 +2,7 @@
 
 This document describes the state Tool Inspector keeps across commands, dialogs and host events. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in the packages' `tests/` folders. Known bugs belong in issues, not here.
 
-All of this state lives in the shared core, `packages/core/src/`, and is the same in OpenCode and Kilo. Each host package builds the plugin with its own `Host` profile, which only changes wording: the host's name in messages and notices, the labels for allowed, asks-first and denied access, and any notes shown above a tool's agents. Kilo's profile adds a note that the access shown is from configured rules, a protected-config note for tools checked as `read` or `edit`, and an exact-action note for `agent_manager`.
+All of this state lives in the shared core, `packages/core/src/`, and is the same in OpenCode and Kilo. Each host package bundles core into its single `dist/tui.js` at build time, so this state exists once per loaded plugin, and builds the plugin with its own `Host` profile, which only changes wording: the host's name in messages and notices, the labels for allowed, asks-first and denied access, and any notes shown above a tool's agents. Kilo's profile adds a note that the access shown is from configured rules, a protected-config note for tools checked as `read` or `edit`, and an exact-action note for `agent_manager`.
 
 The plugin keeps no kv-persisted state, no intervals and no retries. Its only deferred work is the detail view's focus timeout and the microtask that returns to the list.
 

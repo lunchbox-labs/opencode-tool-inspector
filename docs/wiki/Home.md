@@ -2,7 +2,7 @@
 
 Browse the tools available to OpenCode or Kilo agents from the TUI: each tool's description, input schema and the agents that can use it. These guides describe the current repository; published packages may differ.
 
-There is one package per host, built from a shared core:
+There is one package per host, each with the shared core bundled in:
 
 | Host | Package |
 | --- | --- |
@@ -16,4 +16,4 @@ There is one package per host, built from a shared core:
 ## Developer documentation
 
 - [Developer](Developer): workspace layout, development and compatibility testing for each host.
-- [Publishing](Publishing): trusted publisher setup and the release workflow for the three packages.
+- [Publishing](Publishing): trusted publisher setup and the release workflow for the two packages.

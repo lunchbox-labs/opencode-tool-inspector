@@ -10,13 +10,13 @@ Read the applicable shared Lunchbox Labs standards before editing this repositor
 
 These documents must be read explicitly; GitHub does not automatically inherit them here.
 
-This repository is an npm workspace with three packages released together at one version:
+This repository is an npm workspace with two published packages, released together at one version, and their private shared source:
 
-- `packages/core`: `@lunchbox-labs/tool-inspector-core`, all shared logic, built for a host from a `Host` profile (the host's name in messages, access labels and access notes).
+- `packages/core`: `@lunchbox-labs/tool-inspector-core`, private and never published. All shared logic, built for a host from a `Host` profile (the host's name in messages, access labels and access notes).
 - `packages/opencode`: `@lunchbox-labs/opencode-tool-inspector`, the OpenCode adapter.
 - `packages/kilo`: `@lunchbox-labs/kilo-tool-inspector`, the Kilo adapter.
 
-Put behaviour in core and keep the adapters to their `Host` profile and entry point. Express host differences as profile data where you can. Core has no runtime dependency on any host package; it is typed against `@opencode-ai/plugin`, and the Kilo adapter adapts Kilo's API type to it. Adapters depend on core at exactly the shared version.
+Put behaviour in core and keep the adapters to their `Host` profile and entry point. Express host differences as profile data where you can. Core has no runtime dependency on any host package; it is typed against `@opencode-ai/plugin`, and the Kilo adapter adapts Kilo's API type to it. Each adapter's build (tsdown, `tsdown.config.ts` in the package) bundles core's source into one `dist/tui.js` and `dist/tui.d.ts` and keeps every other import external; it fails if anything from `node_modules` would be inlined. No adapter lists core in any dependency field. A runtime dependency added to core must also go into each adapter's `dependencies`. Core resolves to its TypeScript source through the workspace link, so tests and typechecking need no build.
 
 Run commands from the repository root. `npm run check` includes static checks and unit tests for every package. Run `npm run test:package` separately for packed-package validation, and `npm run test:native` (with `NATIVE_HOST=kilo` and `KILO_TEST_VERSION=floor` or `latest-compatible`) for the native Kilo TUI check.
 
