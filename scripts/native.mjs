@@ -24,7 +24,6 @@ try {
     { stdio: "inherit", env: { ...process.env, NATIVE_CHECK_ROOT: root } },
   );
 } finally {
-  const started = Date.now();
   // Windows can hold an exited process's files for a moment.
   await rm(root, {
     recursive: true,
@@ -32,10 +31,8 @@ try {
     maxRetries: 10,
     retryDelay: 500,
   });
-  console.error(`Removed the check's directory in ${Date.now() - started}ms.`);
 }
 if (result.error) {
   throw result.error;
 }
-console.error(`The ${host} native check exited with status ${result.status}.`);
 process.exit(result.status ?? 1);
