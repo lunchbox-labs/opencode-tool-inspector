@@ -1,12 +1,14 @@
 # State machines
 
-This document describes the state Tool Inspector keeps across commands, dialogs and host events. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `tests/`. Known bugs belong in issues, not here.
+This document describes the state Tool Inspector keeps across commands, dialogs and host events. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in the packages' `tests/` folders. Known bugs belong in issues, not here.
+
+All of this state lives in the shared core, `packages/core/src/`, and is the same in OpenCode and Kilo. Each host package builds the plugin with its own `Host` profile, which only changes wording: the host's name in messages and notices, the labels for allowed, asks-first and denied access, and any notes shown above a tool's agents. Kilo's profile adds a note that the access shown is from configured rules, a protected-config note for tools checked as `read` or `edit`, and an exact-action note for `agent_manager`.
 
 The plugin keeps no kv-persisted state, no intervals and no retries. Its only deferred work is the detail view's focus timeout and the microtask that returns to the list.
 
 ## Browser dialog controller
 
-`registerToolBrowser` in `src/tui.ts` keeps `revision`, `showing` and `activeRead`, changed by `close`, `display`, `open`, `views.list`, `views.detail` and the `server.instance.disposed` watcher. Every displayed dialog gets a revision, and stale host close callbacks and late reads compare against it and do nothing. Each step takes a `sameView` check from `viewContext`, which holds while the directory, route and session are unchanged and the plugin lifecycle is not aborted.
+`registerToolBrowser` in `packages/core/src/tui.ts` keeps `revision`, `showing` and `activeRead`, changed by `close`, `display`, `open`, `views.list`, `views.detail` and the `server.instance.disposed` watcher. Every displayed dialog gets a revision, and stale host close callbacks and late reads compare against it and do nothing. Each step takes a `sameView` check from `viewContext`, which holds while the directory, route and session are unchanged and the plugin lifecycle is not aborted.
 
 - `/tools` or the palette's "Browse tools" opens a "Loading tools" alert and starts a catalog read, from any state. Running it during a read aborts the previous read.
 - A read that resolves for the current revision and view shows the tool list, with one toast for any notices first. A failed read or an empty catalog closes with a toast. A read for a changed view closes without one.
@@ -42,7 +44,7 @@ stateDiagram-v2
 
 ## Detail viewer
 
-`viewer` in `src/tui.ts` memoizes the promise from `createDetailViewer` in `src/detail-viewer.ts`, started by the first `/tools`. If importing `@opentui/core` fails, one warning toast says details show as plain text. Both the scrollable viewer and the plain-text fallback last for the plugin's lifetime.
+`viewer` in `packages/core/src/tui.ts` memoizes the promise from `createDetailViewer` in `packages/core/src/detail-viewer.ts`, started by the first `/tools`. If importing `@opentui/core` fails, one warning toast says details show as plain text. Both the scrollable viewer and the plain-text fallback last for the plugin's lifetime.
 
 ```mermaid
 stateDiagram-v2
@@ -56,7 +58,7 @@ stateDiagram-v2
 
 ## Catalog read
 
-Each `/tools` read in `src/tui.ts` collects `modelFailure`, `listFailure` and `agentsFailure` while `agentsRead` runs in parallel.
+Each `/tools` read in `packages/core/src/tui.ts` collects `modelFailure`, `listFailure` and `agentsFailure` while `agentsRead` runs in parallel.
 
 - `chooseModel` takes the model of the session's latest user message, then the configured `model` when its provider is connected or no provider is listed, then the default of the first connected provider that has one, then none. A failed providers request is kept as `modelFailure`.
 - The tool list comes from `tool.list` for that model. If it fails, returns the wrong shape or there is no model, it falls back to `tool.ids` with names only and a notice. If `tool.ids` errors or returns the wrong shape too, the read fails.
@@ -98,9 +100,9 @@ stateDiagram-v2
 
 ## Schema rendering
 
-`schemaLines` in `src/schema-text.ts` renders a tool's input schema each time its detail opens, synchronously, keeping a `Rendering` for that call: the lines written, the remaining character and reference-lookup budgets, how often a depth limit cut a listing short, the `allOf` merges that left members out, where each shared definition's fields were listed, and the first field that refers to each definition.
+`schemaLines` in `packages/core/src/schema-text.ts` renders a tool's input schema each time its detail opens, synchronously, keeping a `Rendering` for that call: the lines written, the remaining character and reference-lookup budgets, how often a depth limit cut a listing short, the `allOf` merges that left members out, where each shared definition's fields were listed, and the first field that refers to each definition.
 
-- A missing or non-object schema says OpenCode reported no input schema.
+- A missing or non-object schema says the host reported no input schema.
 - Fields are written one line at a time. A line over 400 characters ends in "…", and enum, union, `type` and tuple element lists name their first few values and count the rest. Tuples read their elements from `prefixItems`, or an `items` list, and any further elements from `items` or `additionalItems`. Listings go 9 levels deep (depths 0 to 8) and write a "…" line below that, and array items, unions and `allOf` members are followed at most 64 levels, with "…" where `allOf` members were left out.
 - Writing a 401st line, or going over 100,000 characters or 50,000 reference lookups, throws `SchemaTooLarge`. If lines were written they end with "… Schema too large to show in full."; otherwise the raw schema shows, cut to 400 lines with a count of the rest. Any other error, such as a stack overflow, also shows the raw schema.
 - A root union lists each option's fields, under the same limits as any listing. A root with no fields to list shows `Input is <type>`, "Takes no input." or, for combinators that can't be listed, the raw schema.
@@ -122,7 +124,7 @@ stateDiagram-v2
 
 ### References
 
-Each `$ref` resolves to one of four outcomes. A reference that misses under `#/$defs/` or `#/definitions/` is retried under the other, since OpenCode 1.19 renames zod's `$defs` without rewriting references, and references are keyed by the spelling that resolved. A definition that is only a reference to another is followed.
+Each `$ref` resolves to one of four outcomes. A reference that misses under `#/$defs/` or `#/definitions/` is retried under the other, since OpenCode 1.19 and Kilo 7.8 rename zod's `$defs` without rewriting references, and references are keyed by the spelling that resolved. A definition that is only a reference to another is followed.
 
 - **Resolved:** the target, with the reference's own keys over it, is rendered and the reference joins the set being expanded.
 - **Recursive:** the target is already being expanded. Its type is the definition's name, or for a generated name such as zod's `__schema0`, its own type, else "same type as <field>" for the first field that refers to it, else "recursive value". A field that refers back says "Same fields as <path>." where that definition is being listed.
@@ -163,6 +165,6 @@ stateDiagram-v2
 ## Registration and minor state
 
 - The plugin registers its keymap layer and a `server.instance.disposed` subscription, and removes both on `api.lifecycle.onDispose`. Dispose aborts a pending read, which closes the loading alert. It does not close a list or detail: the detail view destroys itself on abort, and a list left open answers Enter with the toast to run `/tools` again.
-- `compiledWildcards` in `src/agents.ts` memoizes one regular expression per permission pattern for the process.
-- `literalTexts` in `src/schema-text.ts` is a WeakMap that caches a const or default's shortened text by object identity, across renderings. It is never invalidated, so a schema object the host changes in place keeps its old literal text until it is replaced.
+- `compiledWildcards` in `packages/core/src/agents.ts` memoizes one regular expression per permission pattern for the process.
+- `literalTexts` in `packages/core/src/schema-text.ts` is a WeakMap that caches a const or default's shortened text by object identity, across renderings. It is never invalidated, so a schema object the host changes in place keeps its old literal text until it is replaced.
 - The host owns the list's filter and cursor. Returning from a detail restores the cursor on the tool, but not the typed filter.
