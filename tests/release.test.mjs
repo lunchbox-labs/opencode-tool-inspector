@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { validateRelease as validate } from "../scripts/validate-release.mjs";
 
 const repository = {
-  url: "git+https://github.com/lunchbox-labs/opencode-tool-inspector.git",
+  url: "git+https://github.com/lunchbox-labs/tool-inspector-plugin.git",
 };
 const coreName = "@lunchbox-labs/tool-inspector-core";
 const packages = {
@@ -218,7 +218,7 @@ async function workflowFile(name) {
 }
 
 const repositoryGuard =
-  "github.repository == 'lunchbox-labs/opencode-tool-inspector' && github.event_name == 'workflow_dispatch'";
+  "github.repository == 'lunchbox-labs/tool-inspector-plugin' && github.event_name == 'workflow_dispatch'";
 
 test("a manual run on main verifies the packages' shared version, runs Check, publishes to npm and releases", async () => {
   const { workflow } = await workflowFile("release.yml");

@@ -1,6 +1,6 @@
 # Publishing
 
-The [Release workflow](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`, and publishes only when its **publish** input is checked. One run releases the version the two host packages share:
+The [Release workflow](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`, and publishes only when its **publish** input is checked. One run releases the version the two host packages share:
 
 - `@lunchbox-labs/opencode-tool-inspector`
 - `@lunchbox-labs/kilo-tool-inspector`
@@ -11,7 +11,7 @@ Core (`packages/core`) is private: each package's build bundles it in, so it is 
 
 The workflow expects these settings, configured through the respective services. This page describes the required setup, not confirmation of its current state.
 
-- **npm trusted publishers:** one for each of the two packages, each with organization `lunchbox-labs`, repository `opencode-tool-inspector`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. `@lunchbox-labs/opencode-tool-inspector` already has one; `@lunchbox-labs/kilo-tool-inspector` needs its own before its first release, as [Bootstrap a new package](#bootstrap-a-new-package) describes. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
+- **npm trusted publishers:** one for each of the two packages, each with organization `lunchbox-labs`, repository `tool-inspector-plugin`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. `@lunchbox-labs/opencode-tool-inspector` already has one; `@lunchbox-labs/kilo-tool-inspector` needs its own before its first release, as [Bootstrap a new package](#bootstrap-a-new-package) describes. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
 - **`release` environment:** allows deployments from `main` only. It holds no secrets or variables.
 - **Actions policy:** only maintainers may start Release, and Wiki may run only on pushes to `main`. Both can write to the repository.
 - **Tag rulesets:** a ruleset blocks updating and deleting `v*` tags. No ruleset blocks creating them, because Release creates the tag itself.
@@ -27,7 +27,7 @@ npm adds a trusted publisher only to a package that already exists, and Release 
    ```sh
    mkdir bootstrap && cd bootstrap
    echo '{}' > package.json
-   npm pkg set name=@lunchbox-labs/kilo-tool-inspector version=0.0.0-bootstrap.0 license=MIT description="Placeholder; install a released version" repository.type=git repository.url=git+https://github.com/lunchbox-labs/opencode-tool-inspector.git repository.directory=packages/kilo
+   npm pkg set name=@lunchbox-labs/kilo-tool-inspector version=0.0.0-bootstrap.0 license=MIT description="Placeholder; install a released version" repository.type=git repository.url=git+https://github.com/lunchbox-labs/tool-inspector-plugin.git repository.directory=packages/kilo
    npm publish --access public --tag bootstrap
    ```
 
@@ -56,9 +56,9 @@ The run's summary names the version as soon as the **Release version** job finis
 
 ## What the run does
 
-**Release version** stops a run started on any other branch, reads the version from the two packages and stops unless they have the same one. **Verify** then requires the checked-out commit to match the run's commit, stops when either package has never been published (see [Bootstrap a new package](#bootstrap-a-new-package)), and stops before building when `v<version>` is already tagged or either package already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, that it doesn't list core in any dependency field, and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the two builds and uploads the tarballs with SHA-256 checksums.
+**Release version** stops a run started on any other branch, reads the version from the two packages and stops unless they have the same one. **Verify** then requires the checked-out commit to match the run's commit, stops when either package has never been published (see [Bootstrap a new package](#bootstrap-a-new-package)), and stops before building when `v<version>` is already tagged or either package already has that version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access, that it doesn't list core in any dependency field, and its lockfile entry. Verify runs `npm ci` and `npm run test:package`, packs the two builds and uploads the tarballs with SHA-256 checksums.
 
-**Check** runs the [Check workflow](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
+**Check** runs the [Check workflow](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
 
 **Publish npm** downloads the verified tarballs, checks their checksums and publishes them in order, OpenCode first, with scripts disabled. It does not rebuild the packages. **GitHub release** then creates the `v<version>` tag on the release commit and publishes a GitHub release for it with the same two tarballs attached.
 

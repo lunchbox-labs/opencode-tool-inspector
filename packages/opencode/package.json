@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lunchbox-labs/opencode-tool-inspector.git",
+    "url": "git+https://github.com/lunchbox-labs/tool-inspector-plugin.git",
     "directory": "packages/opencode"
   },
   "engines": {

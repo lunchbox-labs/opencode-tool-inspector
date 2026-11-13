@@ -25,7 +25,7 @@ const dependencyFields = [
   "optionalDependencies",
 ];
 const repositoryUrl =
-  "git+https://github.com/lunchbox-labs/opencode-tool-inspector.git";
+  "git+https://github.com/lunchbox-labs/tool-inspector-plugin.git";
 
 function validatePackage(
   { directory, name },

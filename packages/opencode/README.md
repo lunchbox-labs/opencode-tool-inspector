@@ -18,8 +18,8 @@ Run `/tools`, or **Browse tools** from the command palette, to list the tools Op
 
 ## Documentation
 
-The [wiki](https://github.com/lunchbox-labs/opencode-tool-inspector/wiki) has the full guides:
+The [wiki](https://github.com/lunchbox-labs/tool-inspector-plugin/wiki) has the full guides:
 
-- [Usage](https://github.com/lunchbox-labs/opencode-tool-inspector/wiki/Usage): which model's tools are listed, what the list leaves out and how input schemas are shown.
-- [Agent access](https://github.com/lunchbox-labs/opencode-tool-inspector/wiki/Usage#agent-access): how a tool's detail shows each agent's access.
-- [Developer](https://github.com/lunchbox-labs/opencode-tool-inspector/wiki/Developer): development, compatibility testing and publishing.
+- [Usage](https://github.com/lunchbox-labs/tool-inspector-plugin/wiki/Usage): which model's tools are listed, what the list leaves out and how input schemas are shown.
+- [Agent access](https://github.com/lunchbox-labs/tool-inspector-plugin/wiki/Usage#agent-access): how a tool's detail shows each agent's access.
+- [Developer](https://github.com/lunchbox-labs/tool-inspector-plugin/wiki/Developer): development, compatibility testing and publishing.
