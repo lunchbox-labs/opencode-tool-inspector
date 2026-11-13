@@ -38,7 +38,7 @@ jobs:
   version:
     name: Release version
     if: >-
-      github.repository == 'lunchbox-labs/opencode-tool-inspector' &&
+      github.repository == 'lunchbox-labs/tool-inspector-plugin' &&
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -104,7 +104,7 @@ jobs:
     name: Verify
     needs: [version]
     if: >-
-      github.repository == 'lunchbox-labs/opencode-tool-inspector' &&
+      github.repository == 'lunchbox-labs/tool-inspector-plugin' &&
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -209,7 +209,7 @@ jobs:
     # every check.
     needs: [verify]
     if: >-
-      github.repository == 'lunchbox-labs/opencode-tool-inspector' &&
+      github.repository == 'lunchbox-labs/tool-inspector-plugin' &&
       github.event_name == 'workflow_dispatch'
     permissions:
       contents: read

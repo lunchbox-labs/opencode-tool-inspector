@@ -6,9 +6,9 @@ For contributors and maintainers working on Tool Inspector:
 - [Local builds and checks](#build-local-packages): local builds, the TUI-only package shape and compatibility checks for each host.
 - [Publishing](Publishing): trusted publisher setup and the release workflow.
 
-The plugin's state machines are documented in [docs/state-machines.md](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/docs/state-machines.md). These wiki pages are published from [docs/wiki](https://github.com/lunchbox-labs/opencode-tool-inspector/tree/main/docs/wiki) on every push to `main` that changes them; change them there.
+The plugin's state machines are documented in [docs/state-machines.md](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/docs/state-machines.md). These wiki pages are published from [docs/wiki](https://github.com/lunchbox-labs/tool-inspector-plugin/tree/main/docs/wiki) on every push to `main` that changes them; change them there.
 
-The repository's [AGENTS.md](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/AGENTS.md) and linked shared standards remain the authoritative machine instructions. [User documentation](Home#user-documentation) covers installation and everyday use.
+The repository's [AGENTS.md](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/AGENTS.md) and linked shared standards remain the authoritative machine instructions. [User documentation](Home#user-documentation) covers installation and everyday use.
 
 ## Workspace layout
 
@@ -58,7 +58,7 @@ Tests should protect observable behavior, safety boundaries and host contracts. 
 
 ## Host compatibility
 
-Each host package keeps its supported range and floor in its tests folder: [packages/opencode/tests/opencode.json](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/packages/opencode/tests/opencode.json) and [packages/kilo/tests/kilo.json](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/packages/kilo/tests/kilo.json).
+Each host package keeps its supported range and floor in its tests folder: [packages/opencode/tests/opencode.json](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/packages/opencode/tests/opencode.json) and [packages/kilo/tests/kilo.json](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/packages/kilo/tests/kilo.json).
 
 | Host | Plugin and SDK dev dependencies | `@opentui/*` | `solid-js` |
 | --- | --- | --- | --- |
@@ -69,4 +69,4 @@ Each host's plugin and SDK dev dependencies share one exact version inside its r
 
 Other dependencies use version ranges, and `package-lock.json` decides what CI installs. Shared tooling at the root uses `^`, except TypeScript and Prettier, which use `~` because their minor releases change type checking and formatting. Third-party runtime dependencies use `^`. The exact pins are the host-matched dev dependencies above, the `node-pty` version the native check installs, and the npm version in the Release workflow's publish job.
 
-[Check CI](https://github.com/lunchbox-labs/opencode-tool-inspector/blob/main/.github/workflows/check.yml) runs the unit and package tests on Linux and Windows for every pull request and push to `main`, and the static checks on Linux. Its native matrix runs the Kilo check on Linux and Windows, against the floor and the latest compatible Kilo CLI.
+[Check CI](https://github.com/lunchbox-labs/tool-inspector-plugin/blob/main/.github/workflows/check.yml) runs the unit and package tests on Linux and Windows for every pull request and push to `main`, and the static checks on Linux. Its native matrix runs the Kilo check on Linux and Windows, against the floor and the latest compatible Kilo CLI.
